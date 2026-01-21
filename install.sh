@@ -52,26 +52,56 @@ prepare_system() {
         echo -e "${RED}不支持的系统: $OS${PLAIN}"; exit 1
     fi
 
-    # 性能优化
-    echo "net.core.default_qdisc=fq" > /etc/sysctl.conf
-    echo "net.ipv4.tcp_congestion_control=bbr" >> /etc/sysctl.conf
-    # 强制关闭 IPv6
-    if ! grep -q "disable_ipv6" /etc/sysctl.conf; then
-        echo "net.ipv6.conf.all.disable_ipv6 = 1" >> /etc/sysctl.conf
-        echo "net.ipv6.conf.default.disable_ipv6 = 1" >> /etc/sysctl.conf
+    # === 智能性能优化 (BBR + IPv6) ===
+    echo -e "${YELLOW}[优化] 正在检测网络配置...${PLAIN}"
+    
+    # 1. BBR 检测与交互
+    CURRENT_ALGO=$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null)
+    if [[ "$CURRENT_ALGO" == "bbr" ]]; then
+        echo -e "${GREEN}检测到 BBR 已开启，跳过配置。${PLAIN}"
+    else
+        read -p "是否开启 BBR + FQ 加速? [y/n] (默认: y): " ENABLE_BBR
+        ENABLE_BBR=${ENABLE_BBR:-y}
+        if [[ "$ENABLE_BBR" =~ ^[yY]$ ]]; then
+            echo "net.core.default_qdisc=fq" > /etc/sysctl.conf
+            echo "net.ipv4.tcp_congestion_control=bbr" >> /etc/sysctl.conf
+            echo -e "${GREEN}BBR 已配置开启。${PLAIN}"
+        else
+            echo -e "${YELLOW}已取消开启 BBR。${PLAIN}"
+        fi
     fi
+
+    # 2. IPv6 检测与交互
+    IPV6_DISABLED=$(sysctl -n net.ipv6.conf.all.disable_ipv6 2>/dev/null)
+    if [[ "$IPV6_DISABLED" == "1" ]]; then
+        echo -e "${GREEN}检测到 IPv6 已关闭，跳过配置。${PLAIN}"
+    else
+        read -p "是否强制关闭 IPv6 (防断流)? [y/n] (默认: y): " DISABLE_IPV6
+        DISABLE_IPV6=${DISABLE_IPV6:-y}
+        if [[ "$DISABLE_IPV6" =~ ^[yY]$ ]]; then
+            echo "net.ipv6.conf.all.disable_ipv6 = 1" >> /etc/sysctl.conf
+            echo "net.ipv6.conf.default.disable_ipv6 = 1" >> /etc/sysctl.conf
+            echo -e "${GREEN}IPv6 关闭指令已写入。${PLAIN}"
+        else
+            echo -e "${YELLOW}保持 IPv6 开启。${PLAIN}"
+        fi
+    fi
+    
+    # 应用内核参数
     sysctl -p >/dev/null 2>&1
 
-    # Swap 检查
-    read -p "是否创建 1GB 虚拟内存 (Swap)? [y/n] (默认: y): " CREATE_SWAP
-    CREATE_SWAP=${CREATE_SWAP:-y}
-    if [[ "$CREATE_SWAP" =~ ^[yY]$ ]]; then
-        if [ ! -f /swapfile ]; then
-            echo -e "${YELLOW}[系统] 创建 Swap...${PLAIN}"
+    # === Swap 检查 ===
+    echo -e "${YELLOW}[内存] 检查 Swap 配置...${PLAIN}"
+    if grep -q "swap" /etc/fstab; then
+        echo -e "${GREEN}检测到 Swap 已配置，跳过创建。${PLAIN}"
+    else
+        read -p "是否创建 1GB 虚拟内存 (Swap)? [y/n] (默认: y): " CREATE_SWAP
+        CREATE_SWAP=${CREATE_SWAP:-y}
+        if [[ "$CREATE_SWAP" =~ ^[yY]$ ]]; then
+            echo -e "${YELLOW}正在创建 Swap...${PLAIN}"
             fallocate -l 1G /swapfile && chmod 600 /swapfile && mkswap /swapfile && swapon /swapfile
             echo '/swapfile none swap sw 0 0' >> /etc/fstab
-        else
-            echo -e "${YELLOW}[系统] Swap 已存在。${PLAIN}"
+            echo -e "${GREEN}Swap 创建成功。${PLAIN}"
         fi
     fi
 }

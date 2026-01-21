@@ -35,8 +35,6 @@
 
 使用 **Root** 用户 SSH 登录服务器，执行以下命令：
 
-> ⚠️ **注意**: 请将下方命令中的 `你的用户名/仓库名` 替换为你实际的 GitHub 仓库地址。
-
 ```bash
 bash <(curl -sL https://raw.githubusercontent.com/ike666888/Shadowsocks-2022/refs/heads/main/install.sh)
 ```

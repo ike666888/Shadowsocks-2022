@@ -1,5 +1,6 @@
 #!/bin/bash
-# Shadowsocks 2022 + ShadowTLS V3 一键安装脚本 (精简版)
+# Shadowsocks 2022 + ShadowTLS V3 一键安装脚本 (全架构支持版)
+# 支持架构: AMD64 (x86_64) / ARM64 (aarch64)
 # 支持系统: Debian/Ubuntu/CentOS/Rocky/Alma
 
 RED="\033[31m"
@@ -17,13 +18,26 @@ if [[ $EUID -ne 0 ]]; then
    exit 1
 fi
 
-# 显示主菜单
+# 架构检测
+ARCH=$(uname -m)
+if [[ "$ARCH" == "x86_64" ]]; then
+    SS_ARCH="x86_64-unknown-linux-gnu"
+    TLS_ARCH="x86_64-unknown-linux-musl"
+elif [[ "$ARCH" == "aarch64" || "$ARCH" == "arm64" ]]; then
+    SS_ARCH="aarch64-unknown-linux-gnu"
+    TLS_ARCH="aarch64-unknown-linux-musl"
+else
+    echo -e "${RED}不支持的架构: $ARCH${PLAIN}"
+    exit 1
+fi
+
 show_menu() {
     clear
     echo -e "${GREEN}==============================================${PLAIN}"
-    echo -e "${GREEN}   Shadowsocks 2022 一键安装脚本 (Rust版)     ${PLAIN}"
+    echo -e "${GREEN}   Shadowsocks 2022 一键安装脚本 (全架构版)   ${PLAIN}"
     echo -e "${GREEN}==============================================${PLAIN}"
-    echo -e "请选择安装模式："
+    echo -e "当前架构: ${YELLOW}$ARCH${PLAIN}"
+    echo -e "----------------------------------------------"
     echo -e "${GREEN}1.${PLAIN} 仅安装 Shadowsocks 2022"
     echo -e "${GREEN}2.${PLAIN} 安装 Shadowsocks 2022 + ShadowTLS V3 (推荐)"
     echo -e "${GREEN}3.${PLAIN} 退出脚本并清理残留"
@@ -31,9 +45,8 @@ show_menu() {
     read -p "请输入选项 [1-3]: " MENU_CHOICE
 }
 
-# 系统初始化与环境检测
 prepare_system() {
-    echo -e "${YELLOW}[系统] 正在识别系统并安装依赖...${PLAIN}"
+    echo -e "${YELLOW}[系统] 识别系统并安装依赖...${PLAIN}"
     if [ -f /etc/os-release ]; then
         . /etc/os-release
         OS=$ID
@@ -41,38 +54,34 @@ prepare_system() {
         echo -e "${RED}无法检测系统版本。${PLAIN}"; exit 1
     fi
 
-    if [[ "$OS" == "ubuntu" || "$OS" == "debian" || "$OS" == "kali" ]]; then
+    if [[ "$OS" =~ (ubuntu|debian|kali) ]]; then
         apt update -q && apt install -y wget tar openssl xz-utils curl jq
-    elif [[ "$OS" == "centos" || "$OS" == "rhel" || "$OS" == "almalinux" || "$OS" == "rocky" ]]; then
+    elif [[ "$OS" =~ (centos|rhel|almalinux|rocky) ]]; then
         yum install -y epel-release && yum install -y wget tar openssl xz curl jq firewalld
     else
         echo -e "${RED}不支持的系统: $OS${PLAIN}"; exit 1
     fi
 
-    echo -e "${YELLOW}[优化] 检测网络配置...${PLAIN}"
+    echo -e "${YELLOW}[优化] 网络配置检测...${PLAIN}"
     
-    # BBR 检测
-    CURRENT_ALGO=$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null)
-    if [[ "$CURRENT_ALGO" == "bbr" ]]; then
-        echo -e "${GREEN}BBR 已开启，跳过。${PLAIN}"
+    # BBR
+    if [[ "$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null)" == "bbr" ]]; then
+        echo -e "${GREEN}BBR 已开启。${PLAIN}"
     else
-        read -p "是否开启 BBR + FQ 加速? [y/n] (默认: y): " ENABLE_BBR
-        ENABLE_BBR=${ENABLE_BBR:-y}
-        if [[ "$ENABLE_BBR" =~ ^[yY]$ ]]; then
+        read -p "是否开启 BBR + FQ? [y/n] (默认: y): " ENABLE_BBR
+        if [[ "${ENABLE_BBR:-y}" =~ ^[yY]$ ]]; then
             echo "net.core.default_qdisc=fq" > /etc/sysctl.conf
             echo "net.ipv4.tcp_congestion_control=bbr" >> /etc/sysctl.conf
             echo -e "${GREEN}BBR 已开启。${PLAIN}"
         fi
     fi
 
-    # IPv6 检测
-    IPV6_DISABLED=$(sysctl -n net.ipv6.conf.all.disable_ipv6 2>/dev/null)
-    if [[ "$IPV6_DISABLED" == "1" ]]; then
-        echo -e "${GREEN}IPv6 已关闭，跳过。${PLAIN}"
+    # IPv6
+    if [[ "$(sysctl -n net.ipv6.conf.all.disable_ipv6 2>/dev/null)" == "1" ]]; then
+        echo -e "${GREEN}IPv6 已关闭。${PLAIN}"
     else
         read -p "是否强制关闭 IPv6 (防断流)? [y/n] (默认: y): " DISABLE_IPV6
-        DISABLE_IPV6=${DISABLE_IPV6:-y}
-        if [[ "$DISABLE_IPV6" =~ ^[yY]$ ]]; then
+        if [[ "${DISABLE_IPV6:-y}" =~ ^[yY]$ ]]; then
             echo "net.ipv6.conf.all.disable_ipv6 = 1" >> /etc/sysctl.conf
             echo "net.ipv6.conf.default.disable_ipv6 = 1" >> /etc/sysctl.conf
             echo -e "${GREEN}IPv6 已关闭。${PLAIN}"
@@ -80,14 +89,13 @@ prepare_system() {
     fi
     sysctl -p >/dev/null 2>&1
 
-    # Swap 检测
-    echo -e "${YELLOW}[内存] 检测 Swap 配置...${PLAIN}"
+    # Swap
+    echo -e "${YELLOW}[内存] Swap 检测...${PLAIN}"
     if grep -q "swap" /etc/fstab; then
-        echo -e "${GREEN}Swap 已存在，跳过。${PLAIN}"
+        echo -e "${GREEN}Swap 已存在。${PLAIN}"
     else
-        read -p "是否创建 1GB 虚拟内存 (Swap)? [y/n] (默认: y): " CREATE_SWAP
-        CREATE_SWAP=${CREATE_SWAP:-y}
-        if [[ "$CREATE_SWAP" =~ ^[yY]$ ]]; then
+        read -p "是否创建 1GB Swap? [y/n] (默认: y): " CREATE_SWAP
+        if [[ "${CREATE_SWAP:-y}" =~ ^[yY]$ ]]; then
             fallocate -l 1G /swapfile && chmod 600 /swapfile && mkswap /swapfile && swapon /swapfile
             echo '/swapfile none swap sw 0 0' >> /etc/fstab
             echo -e "${GREEN}Swap 创建成功。${PLAIN}"
@@ -95,12 +103,11 @@ prepare_system() {
     fi
 }
 
-# 用户参数配置
 configure_params() {
-    echo -e "\n${YELLOW}[配置] 请选择加密协议:${PLAIN}"
-    echo -e "  1) 2022-blake3-aes-128-gcm       ${GREEN}(x86/EPYC 推荐)${PLAIN}"
-    echo -e "  2) 2022-blake3-aes-256-gcm       (更高安全)"
-    echo -e "  3) 2022-blake3-chacha20-poly1305 (ARM/移动端)"
+    echo -e "\n${YELLOW}[配置] 选择加密协议:${PLAIN}"
+    echo -e "  1) 2022-blake3-aes-128-gcm       ${GREEN}(性能推荐)${PLAIN}"
+    echo -e "  2) 2022-blake3-aes-256-gcm       (高安)"
+    echo -e "  3) 2022-blake3-chacha20-poly1305 (ARM/移动端优化)"
     read -p "请输入选项 [1-3] (默认: 1): " METHOD_NUM
     METHOD_NUM=${METHOD_NUM:-1}
 
@@ -120,16 +127,16 @@ configure_params() {
     fi
 }
 
-# 安装 Shadowsocks-Rust
 install_ss() {
-    echo -e "${YELLOW}[安装] Shadowsocks-Rust...${PLAIN}"
+    echo -e "${YELLOW}[安装] Shadowsocks-Rust ($ARCH)...${PLAIN}"
     SS_TAG=$(curl -s https://api.github.com/repos/shadowsocks/shadowsocks-rust/releases/latest | grep 'tag_name' | cut -d\" -f4)
-    wget -q "https://github.com/shadowsocks/shadowsocks-rust/releases/download/${SS_TAG}/shadowsocks-${SS_TAG}.x86_64-unknown-linux-gnu.tar.xz"
+    # 根据架构变量 SS_ARCH 下载
+    wget -q "https://github.com/shadowsocks/shadowsocks-rust/releases/download/${SS_TAG}/shadowsocks-${SS_TAG}.${SS_ARCH}.tar.xz"
     tar -xf shadowsocks-*.tar.xz
     mv ssserver /usr/local/bin/ && rm sslocal ssurl ssmanager shadowsocks-*.tar.xz 2>/dev/null
     chmod +x /usr/local/bin/ssserver
 
-    # 根据模式决定监听地址
+    # 监听地址逻辑
     if [[ "$MENU_CHOICE" == "1" ]]; then
         LISTEN_ADDR="0.0.0.0"
         FINAL_PORT=$SS_PORT
@@ -163,10 +170,10 @@ WantedBy=multi-user.target
 EOF
 }
 
-# 安装 ShadowTLS V3
 install_tls() {
-    echo -e "${YELLOW}[安装] ShadowTLS V3...${PLAIN}"
-    wget -q https://github.com/ihciah/shadow-tls/releases/latest/download/shadow-tls-x86_64-unknown-linux-musl -O /usr/local/bin/shadow-tls
+    echo -e "${YELLOW}[安装] ShadowTLS V3 ($ARCH)...${PLAIN}"
+    # 根据架构变量 TLS_ARCH 下载
+    wget -q "https://github.com/ihciah/shadow-tls/releases/latest/download/shadow-tls-${TLS_ARCH}" -O /usr/local/bin/shadow-tls
     chmod +x /usr/local/bin/shadow-tls
 
     cat > /etc/systemd/system/shadow-tls.service <<EOF
@@ -184,16 +191,11 @@ EOF
     systemctl enable --now shadow-tls
 }
 
-# 启动服务与防火墙
 finalize() {
     systemctl daemon-reload
     systemctl enable --now ss-rust
     
-    if [[ "$MENU_CHOICE" == "1" ]]; then
-        OPEN_PORT=$SS_PORT
-    else
-        OPEN_PORT=$TLS_PORT
-    fi
+    OPEN_PORT=$([ "$MENU_CHOICE" == "1" ] && echo $SS_PORT || echo $TLS_PORT)
 
     echo -e "${YELLOW}[网络] 放行端口: $OPEN_PORT${PLAIN}"
     if command -v firewall-cmd >/dev/null 2>&1; then
@@ -207,14 +209,13 @@ finalize() {
     fi
 }
 
-# 输出配置信息
 show_result() {
     PUBLIC_IP=$(curl -s4 ifconfig.me)
     USER_INFO=$(echo -n "${METHOD}:${SS_PASSWORD}" | base64 -w 0)
 
     echo -e ""
     echo -e "${GREEN}==============================================${PLAIN}"
-    echo -e "${GREEN}             安装配置完成！                   ${PLAIN}"
+    echo -e "${GREEN}             安装完成 ($ARCH)                 ${PLAIN}"
     echo -e "${GREEN}==============================================${PLAIN}"
     echo -e "服务器 IP    : ${PUBLIC_IP}"
     echo -e "端口 (Port)  : ${FINAL_PORT}"
@@ -246,7 +247,6 @@ show_result() {
     echo -e ""
 }
 
-# 脚本逻辑入口
 show_menu
 
 case "$MENU_CHOICE" in

@@ -1,5 +1,5 @@
 #!/bin/bash
-# Shadowsocks 2022 + ShadowTLS V3 + SOCKS5 全能安装脚本 (精简版 v5.0)
+# Shadowsocks + Socks5一键安装脚本 (v6.1)
 
 RED="\033[31m"
 GREEN="\033[32m"
@@ -12,15 +12,19 @@ SOCK_PORT=1080
 CONFIG_FILE="/etc/ss-config.json"
 FALLBACK_SS_VER="v1.22.0"
 FALLBACK_TLS_VER="v0.2.25"
+GOST_VER="2.12.0"
 
-# 权限与架构检测
+# 权限检测
 if [[ $EUID -ne 0 ]]; then echo -e "${RED}错误：必须使用 root 用户！${PLAIN}"; exit 1; fi
 
+# 架构检测
 ARCH=$(uname -m)
 if [[ "$ARCH" == "x86_64" ]]; then
     SS_ARCH="x86_64-unknown-linux-gnu"; TLS_ARCH="x86_64-unknown-linux-musl"
+    GOST_ARCH="amd64"
 elif [[ "$ARCH" =~ (aarch64|arm64) ]]; then
     SS_ARCH="aarch64-unknown-linux-gnu"; TLS_ARCH="aarch64-unknown-linux-musl"
+    GOST_ARCH="arm64"
 else
     echo -e "${RED}不支持的架构: $ARCH${PLAIN}"; exit 1
 fi
@@ -30,8 +34,6 @@ check_port() {
     local PORT=$1
     if command -v ss >/dev/null 2>&1; then
         if ss -tulpn | grep -q ":$PORT "; then return 1; fi
-    elif command -v netstat >/dev/null 2>&1; then
-        if netstat -tulpn | grep -q ":$PORT "; then return 1; fi
     elif command -v lsof >/dev/null 2>&1; then
         if lsof -i:$PORT >/dev/null 2>&1; then return 1; fi
     fi
@@ -45,7 +47,6 @@ uninstall_services() {
     echo -e "  2) 卸载 SOCKS5 (Gost)"
     echo -e "  3) 卸载 全部"
     read -p "选项 [1-3]: " UN_OPT
-
     case "${UN_OPT:-3}" in
         1|3)
             systemctl stop ss-rust shadow-tls >/dev/null 2>&1
@@ -55,7 +56,6 @@ uninstall_services() {
             echo -e "${GREEN}SS 组件已卸载。${PLAIN}"
             ;;
     esac
-    
     case "${UN_OPT:-3}" in
         2|3)
             systemctl stop gost >/dev/null 2>&1
@@ -70,13 +70,13 @@ uninstall_services() {
 show_menu() {
     clear
     echo -e "${GREEN}==============================================${PLAIN}"
-    echo -e "${GREEN}   全能代理安装脚本 (SS2022 + SOCKS5) v5.0    ${PLAIN}"
+    echo -e "${GREEN}   Shadowsocks + Socks5一键安装脚本 (v6.1)    ${PLAIN}"
     echo -e "${GREEN}==============================================${PLAIN}"
     echo -e "架构: ${YELLOW}$ARCH${PLAIN}"
     echo -e "----------------------------------------------"
     echo -e "${GREEN}1.${PLAIN} 安装 Shadowsocks 2022"
-    echo -e "${GREEN}2.${PLAIN} 安装 Shadowsocks 2022 + ShadowTLS (推荐)"
-    echo -e "${GREEN}3.${PLAIN} 安装 SOCKS5 代理 (独立服务)"
+    echo -e "${GREEN}2.${PLAIN} 安装 Shadowsocks 2022 + ShadowTLS"
+    echo -e "${GREEN}3.${PLAIN} 安装 SOCKS5 代理 (Gost v${GOST_VER})"
     echo -e "${RED}4.${PLAIN} 卸载服务"
     echo -e "${GREEN}5.${PLAIN} 退出"
     echo -e "----------------------------------------------"
@@ -102,16 +102,9 @@ prepare_system() {
             sysctl -p >/dev/null 2>&1
         fi
     fi
-    if ! grep -q "swap" /etc/fstab; then
-        read -p "创建 1GB Swap? [y/n] (默认: y): " EN_SWAP
-        if [[ "${EN_SWAP:-y}" =~ ^[yY]$ ]]; then
-            fallocate -l 1G /swapfile && chmod 600 /swapfile && mkswap /swapfile && swapon /swapfile
-            echo '/swapfile none swap sw 0 0' >> /etc/fstab
-        fi
-    fi
 }
 
-# --- SOCKS5 ---
+# --- SOCKS5 安装 ---
 install_socks5() {
     echo -e "\n${YELLOW}[配置] SOCKS5 参数:${PLAIN}"
     while true; do
@@ -119,24 +112,33 @@ install_socks5() {
         SOCK_PORT=${IN_PORT:-1080}
         if check_port $SOCK_PORT; then break; else echo -e "${RED}端口占用！${PLAIN}"; fi
     done
-
     read -p "用户名 (默认: admin): " IN_USER
     SOCK_USER=${IN_USER:-admin}
     read -p "密码 (默认: 随机): " IN_PASS
     SOCK_PASS=${IN_PASS:-$(openssl rand -hex 4)}
 
-    echo -e "${YELLOW}[安装] Gost...${PLAIN}"
-    wget -q "https://github.com/ginuerzh/gost/releases/download/v2.11.5/gost-linux-amd64-2.11.5.gz" -O /tmp/gost.gz 
-    if [[ "$ARCH" =~ (aarch64|arm64) ]]; then
-        wget -q "https://github.com/ginuerzh/gost/releases/download/v2.11.5/gost-linux-armv8-2.11.5.gz" -O /tmp/gost.gz
+    echo -e "${YELLOW}[安装] Gost v${GOST_VER}...${PLAIN}"
+    GOST_URL="https://github.com/ginuerzh/gost/releases/download/v${GOST_VER}/gost_${GOST_VER}_linux_${GOST_ARCH}.tar.gz"
+    
+    wget -q "$GOST_URL" -O /tmp/gost.tar.gz
+    if [[ ! -f "/tmp/gost.tar.gz" ]]; then
+        echo -e "${RED}下载失败！请检查网络。${PLAIN}"; return 1
     fi
-    gzip -d -f /tmp/gost.gz && mv /tmp/gost /usr/local/bin/gost && chmod +x /usr/local/bin/gost
+    
+    cd /tmp
+    tar -xzf gost.tar.gz
+    mv gost /usr/local/bin/gost
+    chmod +x /usr/local/bin/gost
+    rm -f gost.tar.gz LICENSE README.md
 
     cat > /etc/systemd/system/gost.service <<EOF
 [Unit]
 Description=Gost SOCKS5
 After=network.target
 [Service]
+User=nobody
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
 ExecStart=/usr/local/bin/gost -L $SOCK_USER:$SOCK_PASS@:$SOCK_PORT socks5
 Restart=always
 LimitNOFILE=65535
@@ -145,23 +147,19 @@ WantedBy=multi-user.target
 EOF
     systemctl daemon-reload && systemctl enable --now gost
     
-    if command -v firewall-cmd >/dev/null 2>&1; then
-        firewall-cmd --zone=public --add-port=$SOCK_PORT/tcp --permanent >/dev/null 2>&1
-        firewall-cmd --reload >/dev/null 2>&1
-    elif command -v ufw >/dev/null 2>&1; then
-        ufw allow $SOCK_PORT/tcp >/dev/null 2>&1
-    fi
-    
     PUBLIC_IP=$(curl -s4 ifconfig.me)
-    echo -e "\n${GREEN}>>> SOCKS5 安装完成 <<<${PLAIN}"
-    echo -e "地址: ${PUBLIC_IP}"
-    echo -e "链接: socks5://${SOCK_USER}:${SOCK_PASS}@${PUBLIC_IP}:${SOCK_PORT}"
+    SOCKS5_LINK="socks5://${SOCK_USER}:${SOCK_PASS}@${PUBLIC_IP}:${SOCK_PORT}"
+    
+    echo -e "\n${GREEN}>>> SOCKS5 部署成功 (v${GOST_VER}) <<<${PLAIN}"
+    echo -e "IP: ${PUBLIC_IP}  端口: ${SOCK_PORT}"
+    echo -e "用户: ${SOCK_USER}  密码: ${SOCK_PASS}"
+    echo -e "${YELLOW}链接:${PLAIN} ${SOCKS5_LINK}"
     echo -e ""
 }
 
-# --- SS/TLS ---
+# --- SS 配置 ---
 configure_ss() {
-    echo -e "\n${YELLOW}[配置] 加密协议:${PLAIN}"
+    echo -e "\n${YELLOW}[配置] SS 参数:${PLAIN}"
     echo -e "  1) 2022-blake3-aes-128-gcm ${GREEN}(推荐)${PLAIN}"
     echo -e "  2) aes-128-gcm"
     read -p "选项 [1-2] (默认: 1): " M_NUM
@@ -178,7 +176,6 @@ configure_ss() {
 
     read -p "开启 Multiplex? [y/n] (默认: n): " EN_MUX
     [[ "${EN_MUX:-n}" =~ ^[yY]$ ]] && MUX_CONF=', "multiplex": { "enabled": true }'
-
     SS_PASSWORD=$(openssl rand -base64 $KEY_LEN)
     
     if [[ "$MENU_CHOICE" == "2" ]]; then
@@ -186,15 +183,14 @@ configure_ss() {
             read -p "伪装域名 (默认: www.microsoft.com): " IN_DOM
             FAKE_DOMAIN=${IN_DOM:-www.microsoft.com}
             if ping -c 1 -W 2 $FAKE_DOMAIN >/dev/null 2>&1; then break; else 
-                echo -e "${RED}无法连接 $FAKE_DOMAIN${PLAIN}"
-                read -p "强制使用? [y/n]: " FORCE_DOM
-                [[ "$FORCE_DOM" =~ ^[yY]$ ]] && break
+                echo -e "${RED}无法连接 $FAKE_DOMAIN${PLAIN}"; read -p "强制使用? [y/n]: " FORCE_DOM; [[ "$FORCE_DOM" =~ ^[yY]$ ]] && break
             fi
         done
         TLS_PASSWORD=$(openssl rand -hex 8)
     fi
 }
 
+# --- SS 安装 ---
 install_ss() {
     echo -e "${YELLOW}[安装] SS-Rust...${PLAIN}"
     SS_TAG=$(curl -s --connect-timeout 5 https://api.github.com/repos/shadowsocks/shadowsocks-rust/releases/latest | grep 'tag_name' | cut -d\" -f4)
@@ -213,11 +209,16 @@ install_ss() {
     "mode": "tcp_and_udp", "tcp_fast_open": true$MUX_CONF
 }
 EOF
+    chmod 644 $CONFIG_FILE
+
     cat > /etc/systemd/system/ss-rust.service <<EOF
 [Unit]
 Description=SS-Rust
 After=network.target
 [Service]
+User=nobody
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
 ExecStart=/usr/local/bin/ssserver -c $CONFIG_FILE
 Restart=always
 LimitNOFILE=65535
@@ -226,6 +227,7 @@ WantedBy=multi-user.target
 EOF
 }
 
+# --- ShadowTLS 安装 ---
 install_tls() {
     echo -e "${YELLOW}[安装] ShadowTLS...${PLAIN}"
     wget -q "https://github.com/ihciah/shadow-tls/releases/latest/download/shadow-tls-${TLS_ARCH}" -O /usr/local/bin/shadow-tls
@@ -239,6 +241,9 @@ install_tls() {
 Description=ShadowTLS
 After=network.target
 [Service]
+User=nobody
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
 ExecStart=/usr/local/bin/shadow-tls --v3 server --listen 0.0.0.0:$TLS_PORT --server 127.0.0.1:$SS_PORT --tls $FAKE_DOMAIN:$TLS_PORT --password $TLS_PASSWORD
 Restart=always
 LimitNOFILE=65535
@@ -264,13 +269,10 @@ show_ss_result() {
     PUBLIC_IP=$(curl -s4 ifconfig.me)
     USER_INFO=$(echo -n "${METHOD}:${SS_PASSWORD}" | base64 -w 0)
     
-    echo -e "\n${GREEN}>>> SS/TLS 安装完成 <<<${PLAIN}"
+    echo -e "\n${GREEN}>>> SS/TLS 部署成功 (安全模式) <<<${PLAIN}"
     echo -e "IP: ${PUBLIC_IP}  端口: ${TLS_PORT}"
-    echo -e "密码: ${SS_PASSWORD}  加密: ${METHOD}"
-
+    
     if [[ "$MENU_CHOICE" == "2" ]]; then
-        echo -e "伪装: ${FAKE_DOMAIN}  TLS密码: ${TLS_PASSWORD}"
-        
         ROCKET_JSON="{\"version\":\"3\",\"host\":\"${FAKE_DOMAIN}\",\"password\":\"${TLS_PASSWORD}\"}"
         ROCKET_PARAM=$(echo -n "$ROCKET_JSON" | base64 -w 0)
         ROCKET_LINK="ss://${USER_INFO}@${PUBLIC_IP}:${TLS_PORT}?shadow-tls=${ROCKET_PARAM}#ShadowTLS"
@@ -278,9 +280,6 @@ show_ss_result() {
         
         echo -e "\n${YELLOW}[小火箭]${PLAIN} ${ROCKET_LINK}"
         echo -e "\n${YELLOW}[通用]${PLAIN} ${NORMAL_LINK}"
-        echo -e "\n${YELLOW}[Sing-box JSON]${PLAIN}"
-        echo -e "{\"type\":\"shadowtls\",\"tag\":\"out-stls\",\"server\":\"${PUBLIC_IP}\",\"server_port\":${TLS_PORT},\"version\":3,\"password\":\"${TLS_PASSWORD}\",\"tls\":{\"enabled\":true,\"server_name\":\"${FAKE_DOMAIN}\",\"utls\":{\"enabled\":true,\"fingerprint\":\"chrome\"}},\"detour\":\"ss-in\"},"
-        echo -e "{\"type\":\"shadowsocks\",\"tag\":\"ss-in\",\"server\":\"${PUBLIC_IP}\",\"server_port\":${TLS_PORT},\"method\":\"${METHOD}\",\"password\":\"${SS_PASSWORD}\",\"detour\":\"out-stls\"}"
     else
         echo -e "\n${YELLOW}[SS链接]${PLAIN} ss://${USER_INFO}@${PUBLIC_IP}:${SS_PORT}#SS-Node"
     fi

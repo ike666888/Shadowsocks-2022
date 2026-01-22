@@ -1,5 +1,5 @@
 #!/bin/bash
-# Shadowsocks 2022 + ShadowTLS V3 一键安装脚本 (全架构支持版)
+# Shadowsocks 2022 + ShadowTLS V3 一键安装脚本
 # 支持架构: AMD64 (x86_64) / ARM64 (aarch64)
 # 支持系统: Debian/Ubuntu/CentOS/Rocky/Alma
 
@@ -31,6 +31,42 @@ else
     exit 1
 fi
 
+# 卸载清理函数
+uninstall_services() {
+    echo -e "${YELLOW}[清理] 正在停止服务并清除文件...${PLAIN}"
+    systemctl stop ss-rust shadow-tls >/dev/null 2>&1
+    systemctl disable ss-rust shadow-tls >/dev/null 2>&1
+    
+    rm -f /etc/systemd/system/ss-rust.service
+    rm -f /etc/systemd/system/shadow-tls.service
+    rm -f /usr/local/bin/ssserver
+    rm -f /usr/local/bin/shadow-tls
+    rm -f $CONFIG_FILE
+    
+    systemctl daemon-reload
+    echo -e "${GREEN}[成功] 旧版本/旧文件已卸载完毕。${PLAIN}"
+}
+
+# 启动时检测
+check_status() {
+    if [[ -f "/etc/systemd/system/ss-rust.service" || -f "/usr/local/bin/ssserver" ]]; then
+        echo -e "${RED}==============================================${PLAIN}"
+        echo -e "${RED}警告：检测到系统中已安装过 Shadowsocks/ShadowTLS！${PLAIN}"
+        echo -e "${RED}==============================================${PLAIN}"
+        echo -e "建议先清理旧环境再进行安装。"
+        read -p "是否删除旧版本并重新开始安装? [y/n] (默认: y): " REINSTALL
+        REINSTALL=${REINSTALL:-y}
+        
+        if [[ "$REINSTALL" =~ ^[yY]$ ]]; then
+            uninstall_services
+        else
+            echo -e "${YELLOW}跳过清理，直接进入菜单。可能导致配置冲突！${PLAIN}"
+        fi
+        echo -e "----------------------------------------------"
+        sleep 1
+    fi
+}
+
 show_menu() {
     clear
     echo -e "${GREEN}==============================================${PLAIN}"
@@ -40,9 +76,10 @@ show_menu() {
     echo -e "----------------------------------------------"
     echo -e "${GREEN}1.${PLAIN} 仅安装 Shadowsocks 2022"
     echo -e "${GREEN}2.${PLAIN} 安装 Shadowsocks 2022 + ShadowTLS V3 (推荐)"
-    echo -e "${GREEN}3.${PLAIN} 退出脚本并清理残留"
+    echo -e "${RED}3.${PLAIN} 卸载 Shadowsocks & ShadowTLS"
+    echo -e "${GREEN}4.${PLAIN} 退出脚本"
     echo -e "----------------------------------------------"
-    read -p "请输入选项 [1-3]: " MENU_CHOICE
+    read -p "请输入选项 [1-4]: " MENU_CHOICE
 }
 
 prepare_system() {
@@ -130,7 +167,6 @@ configure_params() {
 install_ss() {
     echo -e "${YELLOW}[安装] Shadowsocks-Rust ($ARCH)...${PLAIN}"
     SS_TAG=$(curl -s https://api.github.com/repos/shadowsocks/shadowsocks-rust/releases/latest | grep 'tag_name' | cut -d\" -f4)
-    # 根据架构变量 SS_ARCH 下载
     wget -q "https://github.com/shadowsocks/shadowsocks-rust/releases/download/${SS_TAG}/shadowsocks-${SS_TAG}.${SS_ARCH}.tar.xz"
     tar -xf shadowsocks-*.tar.xz
     mv ssserver /usr/local/bin/ && rm sslocal ssurl ssmanager shadowsocks-*.tar.xz 2>/dev/null
@@ -172,7 +208,6 @@ EOF
 
 install_tls() {
     echo -e "${YELLOW}[安装] ShadowTLS V3 ($ARCH)...${PLAIN}"
-    # 根据架构变量 TLS_ARCH 下载
     wget -q "https://github.com/ihciah/shadow-tls/releases/latest/download/shadow-tls-${TLS_ARCH}" -O /usr/local/bin/shadow-tls
     chmod +x /usr/local/bin/shadow-tls
 
@@ -247,6 +282,12 @@ show_result() {
     echo -e ""
 }
 
+# --- 脚本执行入口 ---
+
+# 1. 运行检测
+check_status
+
+# 2. 显示菜单
 show_menu
 
 case "$MENU_CHOICE" in
@@ -266,6 +307,12 @@ case "$MENU_CHOICE" in
         show_result
         ;;
     3)
+        # 单独的卸载逻辑
+        uninstall_services
+        echo -e "${GREEN}卸载完成。${PLAIN}"
+        exit 0
+        ;;
+    4)
         echo -e "${YELLOW}正在清理脚本...${PLAIN}"
         rm -- "$0"
         echo -e "${GREEN}脚本已删除。${PLAIN}"

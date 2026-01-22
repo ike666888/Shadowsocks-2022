@@ -1,5 +1,5 @@
 #!/bin/bash
-# Shadowsocks + Socks5一键安装脚本 (v6.1)
+# Shadowsocks + Socks5 一键安装脚本 (v6.2)
 
 RED="\033[31m"
 GREEN="\033[32m"
@@ -14,10 +14,9 @@ FALLBACK_SS_VER="v1.22.0"
 FALLBACK_TLS_VER="v0.2.25"
 GOST_VER="2.12.0"
 
-# 权限检测
+# 基础检查
 if [[ $EUID -ne 0 ]]; then echo -e "${RED}错误：必须使用 root 用户！${PLAIN}"; exit 1; fi
 
-# 架构检测
 ARCH=$(uname -m)
 if [[ "$ARCH" == "x86_64" ]]; then
     SS_ARCH="x86_64-unknown-linux-gnu"; TLS_ARCH="x86_64-unknown-linux-musl"
@@ -29,7 +28,7 @@ else
     echo -e "${RED}不支持的架构: $ARCH${PLAIN}"; exit 1
 fi
 
-# 端口占用检测
+# 端口检测
 check_port() {
     local PORT=$1
     if command -v ss >/dev/null 2>&1; then
@@ -40,7 +39,7 @@ check_port() {
     return 0
 }
 
-# 卸载服务
+# 卸载逻辑
 uninstall_services() {
     echo -e "${YELLOW}[卸载] 请选择:${PLAIN}"
     echo -e "  1) 卸载 Shadowsocks & ShadowTLS"
@@ -70,7 +69,7 @@ uninstall_services() {
 show_menu() {
     clear
     echo -e "${GREEN}==============================================${PLAIN}"
-    echo -e "${GREEN}   Shadowsocks + Socks5一键安装脚本 (v6.1)    ${PLAIN}"
+    echo -e "${GREEN}   Shadowsocks + Socks5 一键安装脚本 (v6.2)   ${PLAIN}"
     echo -e "${GREEN}==============================================${PLAIN}"
     echo -e "架构: ${YELLOW}$ARCH${PLAIN}"
     echo -e "----------------------------------------------"
@@ -159,13 +158,23 @@ EOF
 
 # --- SS 配置 ---
 configure_ss() {
-    echo -e "\n${YELLOW}[配置] SS 参数:${PLAIN}"
+    echo -e "\n${YELLOW}[配置] 加密协议:${PLAIN}"
     echo -e "  1) 2022-blake3-aes-128-gcm ${GREEN}(推荐)${PLAIN}"
-    echo -e "  2) aes-128-gcm"
-    read -p "选项 [1-2] (默认: 1): " M_NUM
+    echo -e "  2) 2022-blake3-aes-256-gcm (更强)"
+    echo -e "  3) 2022-blake3-chacha20-poly1305 (移动端优化)"
+    echo -e "  4) aes-128-gcm (经典-轻量)"
+    echo -e "  5) aes-256-gcm (经典-更强)"
+    echo -e "  6) chacha20-ietf-poly1305 (经典-通用)"
+    
+    read -p "选项 [1-6] (默认: 1): " M_NUM
     case "${M_NUM:-1}" in
         1) METHOD="2022-blake3-aes-128-gcm"; KEY_LEN=16 ;;
-        *) METHOD="aes-128-gcm"; KEY_LEN=16 ;;
+        2) METHOD="2022-blake3-aes-256-gcm"; KEY_LEN=32 ;;
+        3) METHOD="2022-blake3-chacha20-poly1305"; KEY_LEN=32 ;;
+        4) METHOD="aes-128-gcm"; KEY_LEN=16 ;;
+        5) METHOD="aes-256-gcm"; KEY_LEN=32 ;;
+        6) METHOD="chacha20-ietf-poly1305"; KEY_LEN=32 ;;
+        *) METHOD="2022-blake3-aes-128-gcm"; KEY_LEN=16 ;;
     esac
 
     while true; do
@@ -271,6 +280,8 @@ show_ss_result() {
     
     echo -e "\n${GREEN}>>> SS/TLS 部署成功 (安全模式) <<<${PLAIN}"
     echo -e "IP: ${PUBLIC_IP}  端口: ${TLS_PORT}"
+    echo -e "密码: ${SS_PASSWORD}"
+    echo -e "加密: ${METHOD}"
     
     if [[ "$MENU_CHOICE" == "2" ]]; then
         ROCKET_JSON="{\"version\":\"3\",\"host\":\"${FAKE_DOMAIN}\",\"password\":\"${TLS_PASSWORD}\"}"
@@ -286,7 +297,7 @@ show_ss_result() {
     echo -e ""
 }
 
-# 主流程
+# 主程序
 show_menu
 case "$MENU_CHOICE" in
     1) prepare_system; configure_ss; install_ss; finalize_ss; show_ss_result ;;

@@ -1,6 +1,6 @@
 #!/bin/bash
-# Shadowsocks + Socks5 一键安装脚本 (v6.5)
-# 适配: Debian/Ubuntu/CentOS/Alpine (Systemd & OpenRC)
+# Shadowsocks + Socks5 一键安装脚本 (v6.6 修正版)
+# 修复: Alpine 下进程检测误报问题 / 补全 procps 依赖
 
 RED="\033[31m"
 GREEN="\033[32m"
@@ -22,10 +22,10 @@ check_os() {
         INIT_SYSTEM="openrc"
         LIBC_TYPE="musl"
         
-        # Alpine 依赖补全
-        if ! command -v curl >/dev/null 2>&1 || ! command -v tar >/dev/null 2>&1; then
+        # Alpine 依赖补全 (增加 procps 修复进程检测)
+        if ! command -v curl >/dev/null 2>&1 || ! command -v pidof >/dev/null 2>&1; then
             echo -e "${YELLOW}[系统] 正在补全 Alpine 缺失依赖...${PLAIN}"
-            apk update && apk add bash curl wget tar openssl ca-certificates jq coreutils libcap
+            apk update && apk add bash curl wget tar openssl ca-certificates jq coreutils libcap procps
             update-ca-certificates 2>/dev/null
         fi
         
@@ -184,7 +184,7 @@ uninstall_services() {
 show_menu() {
     clear
     echo -e "${GREEN}==============================================${PLAIN}"
-    echo -e "${GREEN}   Shadowsocks + Socks5 全能整合版 (v6.5)     ${PLAIN}"
+    echo -e "${GREEN}   Shadowsocks + Socks5 全能整合版 (v6.6)     ${PLAIN}"
     echo -e "${GREEN}==============================================${PLAIN}"
     echo -e "系统: ${YELLOW}$OS_TYPE${PLAIN} | 架构: ${YELLOW}$ARCH ($LIBC_TYPE)${PLAIN}"
     echo -e "----------------------------------------------"
@@ -222,7 +222,6 @@ install_socks5() {
 
     echo -e "${YELLOW}[安装] Gost...${PLAIN}"
     if [[ "$OS_TYPE" == "alpine" ]]; then
-        # Alpine/ARM64 命名修正 (arm64 -> armv8)
         local G_ARCH=$GOST_ARCH
         [[ "$G_ARCH" == "arm64" ]] && G_ARCH="armv8"
         
@@ -232,16 +231,13 @@ install_socks5() {
         if [[ ! -s /tmp/gost.gz ]]; then
              echo -e "${RED}下载失败！请检查网络或架构适配。${PLAIN}"; return 1
         fi
-        
         gzip -d -f /tmp/gost.gz && mv /tmp/gost /usr/local/bin/gost
     else
         GOST_URL="https://github.com/ginuerzh/gost/releases/download/v${GOST_VER}/gost_${GOST_VER}_linux_${GOST_ARCH}.tar.gz"
         wget -q "$GOST_URL" -O /tmp/gost.tar.gz
-        
         if [[ ! -s /tmp/gost.tar.gz ]]; then
              echo -e "${RED}下载失败！请检查网络。${PLAIN}"; return 1
         fi
-        
         tar -xzf /tmp/gost.tar.gz -C /tmp && mv /tmp/gost /usr/local/bin/gost
     fi
     chmod +x /usr/local/bin/gost
@@ -249,9 +245,10 @@ install_socks5() {
     create_service "gost" "/usr/local/bin/gost" "-L ${SOCK_USER}:${SOCK_PASS}@:${SOCK_PORT} socks5"
     
     sleep 2
-    if ! pgrep -x "gost" > /dev/null; then
-        echo -e "${RED}警告：Gost 服务启动失败，请运行 cat /var/log/gost.err 查看原因。${PLAIN}"
-        return 1
+    # 修复检测逻辑：改用 pidof 或 netstat，兼容 Alpine
+    if ! pidof gost > /dev/null && ! netstat -nltp 2>/dev/null | grep -q ":$SOCK_PORT"; then
+        echo -e "${RED}警告：Gost 服务检测失败，请运行 cat /var/log/gost.err 排查。${PLAIN}"
+        echo -e "${RED}注意：如果日志显示 'auto://... on [::]:$SOCK_PORT'，说明服务其实是正常的，只是检测脚本误报。${PLAIN}"
     fi
 
     PUBLIC_IP=$(curl -s4 ifconfig.me)

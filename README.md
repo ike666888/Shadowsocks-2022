@@ -1,96 +1,27 @@
-# 🚀 Shadowsocks 2022 + ShadowTLS V3 一键安装脚本
+# 🚀 Shadowsocks + Socks5 全能一键安装脚本 (v6.2)
 
-[![Powered By Rust](https://img.shields.io/badge/Core-Rust-orange?style=flat-square&logo=rust)](https://github.com/shadowsocks/shadowsocks-rust)
-[![ShadowTLS V3](https://img.shields.io/badge/Protocol-ShadowTLS%20V3-blue?style=flat-square)](https://github.com/ihciah/shadow-tls)
-[![Shell Script](https://img.shields.io/badge/Language-Bash-green?style=flat-square&logo=gnu-bash)](https://github.com/)
+> **极速、安全、抗检测。** > 集成 Shadowsocks 2022 (Rust)、ShadowTLS (v3) 和 Gost (SOCKS5) 的全能代理搭建脚本。
 
-这是一个专为**高性能**与**低资源环境**（如 0.5G 内存 VPS）设计的代理搭建脚本。
-
-它能够自动检测系统架构（x86_64 / ARM64），并部署基于 **Rust** 编写的 `Shadowsocks-2022` 和 `ShadowTLS V3`。在提供顶级的抗封锁伪装能力的同时，将内存占用控制在极低水平。
+![Build Status](https://img.shields.io/badge/Build-Passing-brightgreen)
+![Version](https://img.shields.io/badge/Version-v6.2-blue)
+![License](https://img.shields.io/badge/License-GPLv3-orange)
 
 ## ✨ 核心特性
 
-* **⚡️ 极致轻量 (Rust)**: 采用 Rust 双内核，无 GC 开销。空闲状态下内存占用极低（约 10MB-20MB），完美适配小内存机器。
-* **🛡️ 顶级伪装 (ShadowTLS)**: 集成 ShadowTLS V3，模拟真实的 HTTPS (TLS 1.3) 握手流量，通过大厂域名（如 Microsoft）进行伪装，完美绕过白名单检测。
-* **💻 全架构支持**: 自动识别并适配 **AMD64 (x86_64)** 和 **ARM64 (aarch64)** 架构（支持 Oracle ARM、树莓派等）。
-* **🚀 性能榨取**: 默认使用 `2022-blake3-aes-128-gcm` 算法，充分利用 CPU 的 AES 硬件指令集加速，跑满千兆带宽。
-* **📱 客户端优化**: 安装完成后会自动生成**两组链接**：
-    * **通用链接**: 适配 NekoBox, v2rayN, Sing-box。
-    * **小火箭专用链接**: 包含 JSON 配置，解决 Shadowrocket 导入插件参数失败的问题。
-* **🔧 智能环境配置**:
-    * 自动检测并开启 **BBR + FQ** 拥塞控制。
-    * 自动判断并创建 **Swap** (虚拟内存) 防止 OOM。
-    * 交互式关闭 **IPv6** 防止断流。
-    * 自动放行 **Firewalld / UFW** 防火墙端口。
+* **🛡️ 极致安全**：所有服务均以 `User=nobody` (非 Root) 身份运行，利用 Linux `AmbientCapabilities` 监听特权端口。即使被黑，系统依然安全。
+* **⚡ 性能强悍**：基于 Rust 编写的 Shadowsocks 核心与 Gost 隧道，内存占用极低（512MB 内存小鸡也能跑满带宽），默认开启 BBR 加速。
+* **🔌 协议全覆盖**：
+    * **Shadowsocks 2022 (SIP022)**：抗检测、高性能（支持单端口多用户）。
+    * **ShadowTLS v3**：伪装成正常的 HTTPS 流量，过墙神器。
+    * **SOCKS5 (Gost)**：支持 UDP 转发，适合游戏/语音通话。
+    * **Classic AEAD**：兼容老旧设备（OpenWRT/旧手机）。
+* **🌍 跨平台**：自动适配 `x86_64` (AMD/Intel) 和 `aarch64` (ARM64) 架构。
 
-## 🖥️ 支持环境
+## 📥 安装命令
 
-| 维度 | 支持列表 |
-| :--- | :--- |
-| **系统** | Debian 10+, Ubuntu 20.04+, CentOS 7+, AlmaLinux, Rocky Linux |
-| **架构** | AMD64 (x86_64), ARM64 (aarch64) |
-| **内存** | 最低 256MB (建议开启 Swap) |
-
-## 📥 快速安装
-
-使用 **Root** 用户 SSH 登录服务器，执行以下命令：
+使用 Root 用户登录服务器，执行以下命令：
 
 ```bash
 bash <(curl -sL https://raw.githubusercontent.com/ike666888/Shadowsocks-2022/refs/heads/main/install.sh)
 ```
-🛠️ 脚本功能说明
-脚本运行后提供以下选项：
-
-1. 仅安装 Shadowsocks 2022
-模式: 纯净模式
-
-端口: 9000
-
-说明: 速度最快，开销最小。适合中转使用或对伪装要求不高的环境。
-
-2. 安装 Shadowsocks 2022 + ShadowTLS V3 (✨ 推荐)
-模式: 伪装模式
-
-端口: 443
-
-说明: 抗封锁能力最强。
-
-对外暴露 443 端口，伪装成访问 www.microsoft.com。
-
-Shadowsocks 隐藏在内网（127.0.0.1），只有通过 ShadowTLS 握手验证通过的流量才会被转发。
-
-防御主动探测，防御重放攻击。
-
-3. 退出脚本并清理
-说明: 安装完成后选择此项，会自动删除脚本文件，保持 VPS 干净整洁。
-
-📱 客户端连接指南
-安装完成后，脚本会输出配置信息和链接。
-
-🍎 iOS (Shadowrocket / 小火箭)
-请务必复制脚本输出的 [Shadowrocket 专用链接]。
-
-格式特征: 链接中包含 ?shadow-tls=eyJ2ZX... (Base64编码)。
-
-原因: 小火箭目前对标准 SIP002 格式支持不完美，专用链接可自动配置插件参数。
-
-🤖 Android (NekoBox / Sing-box)
-请复制 [通用链接]。
-
-推荐客户端: NekoBox for Android (原生支持 ShadowTLS)。
-
-💻 Windows (v2rayN / NekoRay)
-请复制 [通用链接]。
-
-v2rayN: 请确保核心已更新，且版本在 6.0 以上。
-
-NekoRay: 推荐使用 Sing-box 核心模式。
-
-❓ 常见问题 (FAQ)
-Q: 为什么连不上？
-
-时间同步: SS-2022 协议防止重放攻击，要求服务器与客户端时间误差不能超过 30秒。请检查 VPS 时间。
-
-云安全组: 如果是阿里云、AWS、Oracle 等云厂商，请务必在网页控制台的安全组中放行 TCP/UDP 443 端口。
-
-Q: 为什么选择 AES-128 而不是 AES-256？ 对于翻墙场景，AES-128 安全性已完全足够。在 AES-NI 指令集加持下，128位的性能通常优于 256位，且发热量更低，更适合低配机器。
+🛠️ 功能菜单脚本运行后，提供以下安装选项：安装 Shadowsocks 2022 (推荐)纯净的 SS 协议，适合绝大多数环境。安装 Shadowsocks 2022 + ShadowTLS (高阶)在 SS 外层包裹 TLS 伪装（默认伪装成 Microsoft），适合高墙敏感时期。安装 SOCKS5 代理 (Gost v2.12.0)通用的 SOCKS5 协议，支持 UDP，适合 Telegram、游戏加速。卸载服务干净卸载，不留垃圾文件。🔐 加密协议说明 (重要)本脚本支持“新老两代”协议，请务必在客户端选择匹配的选项，严禁混用！选项编号协议类型客户端配置名称适用场景备注1 (推荐)SS-20222022-blake3-aes-128-gcm主流手机/PC极速，抗检测强2SS-20222022-blake3-aes-256-gcm高安全需求CPU占用稍高3SS-20222022-blake3-chacha20...移动设备适合无AES指令集的CPU4Classicaes-128-gcm老旧路由器/旧手机兼容性最好5Classicaes-256-gcm老旧设备经典加密⚠️ 注意：如果你在脚本选了 1，客户端必须选 2022-blake3-aes-128-gcm。如果你在脚本选了 4，客户端必须选 aes-128-gcm。选错会导致无法连接！📱 客户端避坑指南为了保证连接稳定，请检查以下设置：1. 时间必须同步 ⏰Shadowsocks 2022 对时间要求极严（误差不能超过 ±30秒）。请确保你的手机/电脑时间是自动同步的。服务器端脚本已自动配置 Chrony 校时。2. 关闭 Multiplex (多路复用) 🚫现象：能连上但速度慢，或者频繁断流。解决：在小火箭/v2rayN 设置中，关闭 Multiplex (Mux) 选项。SS-2022 协议不需要这个功能。3. UDP 转发 (游戏/语音) 🎮本脚本搭建的 SOCKS5 和 SS 均完美支持 UDP。关键点：请务必在阿里云/腾讯云/AWS 的网页控制台“安全组”中，同时放行 TCP 和 UDP 协议的端口。📂 文件路径与管理配置文件：/etc/ss-config.json服务管理：查看状态：systemctl status ss-rust重启服务：systemctl restart ss-rustSOCKS5服务：systemctl status gost⚖️ 免责声明本脚本仅供学习交流与网络技术研究使用。请勿用于任何违反当地法律法规的用途。使用本脚本产生的任何后果由使用者自行承担。

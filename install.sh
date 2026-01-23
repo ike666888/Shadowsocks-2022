@@ -1,5 +1,5 @@
 #!/bin/bash
-# Shadowsocks + Socks5 一键安装脚本 (v6.3 全能整合版)
+# Shadowsocks + Socks5 一键安装脚本 (v6.5)
 # 适配: Debian/Ubuntu/CentOS/Alpine (Systemd & OpenRC)
 
 RED="\033[31m"
@@ -15,13 +15,20 @@ FALLBACK_SS_VER="v1.22.0"
 FALLBACK_TLS_VER="v0.2.25"
 GOST_VER="2.12.0"
 
-# --- 0. 系统环境检测 ---
+# --- 0. 系统环境与依赖自检 ---
 check_os() {
     if [ -f /etc/alpine-release ]; then
         OS_TYPE="alpine"
         INIT_SYSTEM="openrc"
         LIBC_TYPE="musl"
-        if ! command -v bash >/dev/null 2>&1; then apk update && apk add bash; fi
+        
+        # Alpine 依赖补全
+        if ! command -v curl >/dev/null 2>&1 || ! command -v tar >/dev/null 2>&1; then
+            echo -e "${YELLOW}[系统] 正在补全 Alpine 缺失依赖...${PLAIN}"
+            apk update && apk add bash curl wget tar openssl ca-certificates jq coreutils libcap
+            update-ca-certificates 2>/dev/null
+        fi
+        
     elif [ -f /etc/os-release ]; then
         . /etc/os-release
         OS_TYPE=$ID
@@ -60,18 +67,17 @@ else
     echo -e "${RED}不支持的架构: $ARCH${PLAIN}"; exit 1
 fi
 
-# --- 2. 依赖安装与BBR ---
+# --- 2. 准备系统环境 ---
 prepare_system() {
     echo -e "${YELLOW}[系统] 环境: $OS_TYPE ($INIT_SYSTEM / $LIBC_TYPE)${PLAIN}"
-    echo -e "${YELLOW}[系统] 安装依赖...${PLAIN}"
     
     if [[ "$OS_TYPE" == "alpine" ]]; then
-        apk update
-        apk add curl wget tar xz openssl jq coreutils libcap
         modprobe tcp_bbr 2>/dev/null || true
     elif [[ "$OS_TYPE" =~ (ubuntu|debian|kali) ]]; then
+        echo -e "${YELLOW}[系统] 安装依赖...${PLAIN}"
         apt update -q && apt install -y wget tar openssl xz-utils curl jq lsof gzip
     elif [[ "$OS_TYPE" =~ (centos|rhel|almalinux|rocky) ]]; then
+        echo -e "${YELLOW}[系统] 安装依赖...${PLAIN}"
         yum install -y epel-release && yum install -y wget tar openssl xz curl jq lsof firewalld gzip
     fi
 
@@ -178,7 +184,7 @@ uninstall_services() {
 show_menu() {
     clear
     echo -e "${GREEN}==============================================${PLAIN}"
-    echo -e "${GREEN}   Shadowsocks + Socks5 全能整合版 (v6.3)     ${PLAIN}"
+    echo -e "${GREEN}   Shadowsocks + Socks5 全能整合版 (v6.5)     ${PLAIN}"
     echo -e "${GREEN}==============================================${PLAIN}"
     echo -e "系统: ${YELLOW}$OS_TYPE${PLAIN} | 架构: ${YELLOW}$ARCH ($LIBC_TYPE)${PLAIN}"
     echo -e "----------------------------------------------"
@@ -216,16 +222,38 @@ install_socks5() {
 
     echo -e "${YELLOW}[安装] Gost...${PLAIN}"
     if [[ "$OS_TYPE" == "alpine" ]]; then
-        GOST_URL="https://github.com/ginuerzh/gost/releases/download/v2.11.5/gost-linux-${GOST_ARCH}-2.11.5.gz"
-        wget -q "$GOST_URL" -O /tmp/gost.gz && gzip -d -f /tmp/gost.gz && mv /tmp/gost /usr/local/bin/gost
+        # Alpine/ARM64 命名修正 (arm64 -> armv8)
+        local G_ARCH=$GOST_ARCH
+        [[ "$G_ARCH" == "arm64" ]] && G_ARCH="armv8"
+        
+        GOST_URL="https://github.com/ginuerzh/gost/releases/download/v2.11.5/gost-linux-${G_ARCH}-2.11.5.gz"
+        wget -q "$GOST_URL" -O /tmp/gost.gz
+        
+        if [[ ! -s /tmp/gost.gz ]]; then
+             echo -e "${RED}下载失败！请检查网络或架构适配。${PLAIN}"; return 1
+        fi
+        
+        gzip -d -f /tmp/gost.gz && mv /tmp/gost /usr/local/bin/gost
     else
         GOST_URL="https://github.com/ginuerzh/gost/releases/download/v${GOST_VER}/gost_${GOST_VER}_linux_${GOST_ARCH}.tar.gz"
-        wget -q "$GOST_URL" -O /tmp/gost.tar.gz && tar -xzf /tmp/gost.tar.gz -C /tmp && mv /tmp/gost /usr/local/bin/gost
+        wget -q "$GOST_URL" -O /tmp/gost.tar.gz
+        
+        if [[ ! -s /tmp/gost.tar.gz ]]; then
+             echo -e "${RED}下载失败！请检查网络。${PLAIN}"; return 1
+        fi
+        
+        tar -xzf /tmp/gost.tar.gz -C /tmp && mv /tmp/gost /usr/local/bin/gost
     fi
     chmod +x /usr/local/bin/gost
 
     create_service "gost" "/usr/local/bin/gost" "-L ${SOCK_USER}:${SOCK_PASS}@:${SOCK_PORT} socks5"
     
+    sleep 2
+    if ! pgrep -x "gost" > /dev/null; then
+        echo -e "${RED}警告：Gost 服务启动失败，请运行 cat /var/log/gost.err 查看原因。${PLAIN}"
+        return 1
+    fi
+
     PUBLIC_IP=$(curl -s4 ifconfig.me)
     SOCKS5_LINK="socks5://${SOCK_USER}:${SOCK_PASS}@${PUBLIC_IP}:${SOCK_PORT}"
     echo -e "\n${GREEN}>>> SOCKS5 部署成功 ($OS_TYPE) <<<${PLAIN}"

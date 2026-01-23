@@ -1,6 +1,4 @@
 #!/bin/bash
-# Shadowsocks + Socks5 一键安装脚本 (v6.6 修正版)
-# 修复: Alpine 下进程检测误报问题 / 补全 procps 依赖
 
 RED="\033[31m"
 GREEN="\033[32m"
@@ -15,14 +13,12 @@ FALLBACK_SS_VER="v1.22.0"
 FALLBACK_TLS_VER="v0.2.25"
 GOST_VER="2.12.0"
 
-# --- 0. 系统环境与依赖自检 ---
 check_os() {
     if [ -f /etc/alpine-release ]; then
         OS_TYPE="alpine"
         INIT_SYSTEM="openrc"
         LIBC_TYPE="musl"
         
-        # Alpine 依赖补全 (增加 procps 修复进程检测)
         if ! command -v curl >/dev/null 2>&1 || ! command -v pidof >/dev/null 2>&1; then
             echo -e "${YELLOW}[系统] 正在补全 Alpine 缺失依赖...${PLAIN}"
             apk update && apk add bash curl wget tar openssl ca-certificates jq coreutils libcap procps
@@ -40,7 +36,6 @@ check_os() {
     fi
 }
 
-# --- 1. 权限与架构检查 ---
 if [[ $EUID -ne 0 ]]; then echo -e "${RED}错误：必须使用 root 用户！${PLAIN}"; exit 1; fi
 check_os
 
@@ -67,7 +62,6 @@ else
     echo -e "${RED}不支持的架构: $ARCH${PLAIN}"; exit 1
 fi
 
-# --- 2. 准备系统环境 ---
 prepare_system() {
     echo -e "${YELLOW}[系统] 环境: $OS_TYPE ($INIT_SYSTEM / $LIBC_TYPE)${PLAIN}"
     
@@ -100,7 +94,6 @@ check_port() {
     return 0
 }
 
-# --- 3. 服务创建 (Systemd/OpenRC) ---
 create_service() {
     local NAME=$1
     local CMD=$2
@@ -145,7 +138,6 @@ EOF
     fi
 }
 
-# --- 4. 卸载逻辑 ---
 uninstall_services() {
     echo -e "${YELLOW}[卸载] 请选择:${PLAIN}"
     echo -e "  1) 卸载 Shadowsocks & ShadowTLS"
@@ -184,7 +176,7 @@ uninstall_services() {
 show_menu() {
     clear
     echo -e "${GREEN}==============================================${PLAIN}"
-    echo -e "${GREEN}   Shadowsocks + Socks5 全能整合版 (v6.6)     ${PLAIN}"
+    echo -e "${GREEN}   Shadowsocks + Socks5 全能整合版 (v6.7)     ${PLAIN}"
     echo -e "${GREEN}==============================================${PLAIN}"
     echo -e "系统: ${YELLOW}$OS_TYPE${PLAIN} | 架构: ${YELLOW}$ARCH ($LIBC_TYPE)${PLAIN}"
     echo -e "----------------------------------------------"
@@ -197,7 +189,6 @@ show_menu() {
     read -p "请输入选项 [1-5]: " MENU_CHOICE
 }
 
-# --- 底部署名函数 ---
 show_footer() {
     echo -e ""
     echo -e "${GREEN}==============================================${PLAIN}"
@@ -207,7 +198,6 @@ show_footer() {
     echo -e ""
 }
 
-# --- SOCKS5 安装 ---
 install_socks5() {
     echo -e "\n${YELLOW}[配置] SOCKS5 参数:${PLAIN}"
     while true; do
@@ -245,20 +235,22 @@ install_socks5() {
     create_service "gost" "/usr/local/bin/gost" "-L ${SOCK_USER}:${SOCK_PASS}@:${SOCK_PORT} socks5"
     
     sleep 2
-    # 修复检测逻辑：改用 pidof 或 netstat，兼容 Alpine
     if ! pidof gost > /dev/null && ! netstat -nltp 2>/dev/null | grep -q ":$SOCK_PORT"; then
         echo -e "${RED}警告：Gost 服务检测失败，请运行 cat /var/log/gost.err 排查。${PLAIN}"
-        echo -e "${RED}注意：如果日志显示 'auto://... on [::]:$SOCK_PORT'，说明服务其实是正常的，只是检测脚本误报。${PLAIN}"
     fi
 
     PUBLIC_IP=$(curl -s4 ifconfig.me)
     SOCKS5_LINK="socks5://${SOCK_USER}:${SOCK_PASS}@${PUBLIC_IP}:${SOCK_PORT}"
+    
     echo -e "\n${GREEN}>>> SOCKS5 部署成功 ($OS_TYPE) <<<${PLAIN}"
+    echo -e "IP: ${PUBLIC_IP}"
+    echo -e "端口: ${SOCK_PORT}"
+    echo -e "用户: ${SOCK_USER}"
+    echo -e "密码: ${SOCK_PASS}"
     echo -e "${YELLOW}链接:${PLAIN} ${SOCKS5_LINK}"
     show_footer
 }
 
-# --- SS 配置 ---
 configure_ss() {
     echo -e "\n${YELLOW}[配置] 加密协议:${PLAIN}"
     echo -e "  1) 2022-blake3-aes-128-gcm ${GREEN}(推荐)${PLAIN}"
@@ -306,7 +298,6 @@ configure_ss() {
     fi
 }
 
-# --- SS 安装 ---
 install_ss() {
     echo -e "${YELLOW}[安装] SS-Rust ($LIBC_TYPE)...${PLAIN}"
     SS_TAG=$(curl -s https://api.github.com/repos/shadowsocks/shadowsocks-rust/releases/latest | grep 'tag_name' | cut -d\" -f4)
@@ -332,7 +323,6 @@ EOF
     create_service "ss-rust" "/usr/local/bin/ssserver" "-c $CONFIG_FILE"
 }
 
-# --- ShadowTLS 安装 ---
 install_tls() {
     echo -e "${YELLOW}[安装] ShadowTLS...${PLAIN}"
     wget -q "https://github.com/ihciah/shadow-tls/releases/latest/download/shadow-tls-${TLS_ARCH}" -O /usr/local/bin/shadow-tls
@@ -366,7 +356,6 @@ show_ss_result() {
     show_footer
 }
 
-# --- 主程序 ---
 show_menu
 case "$MENU_CHOICE" in
     1) prepare_system; configure_ss; install_ss; finalize_ss; show_ss_result ;;

@@ -1,4 +1,4 @@
-# 🚀 Shadowsocks + Socks5 全能一键安装脚本 (v6.2)
+# 🚀 Shadowsocks + Socks5 全能一键安装脚本
 
 > **极速、安全、抗检测。** > 集成 Shadowsocks 2022 (Rust)、ShadowTLS (v3) 和 Gost (SOCKS5) 的全能代理搭建脚本。
 
@@ -23,6 +23,10 @@
 
 ```bash
 bash <(curl -sL https://raw.githubusercontent.com/ike666888/Shadowsocks-2022/refs/heads/main/install.sh)
+```
+Alpine推荐使用这条命令
+```bash
+if [ -f /etc/alpine-release ]; then apk update && apk add bash curl; fi && bash <(curl -sL https://raw.githubusercontent.com/ike666888/Shadowsocks-2022/refs/heads/main/install.sh)
 ```
 ## 🛠️ 功能菜单
 

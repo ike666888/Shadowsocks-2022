@@ -1,4 +1,6 @@
 #!/bin/bash
+# Shadowsocks + Socks5 一键安装脚本 (v7.3 智能增量版)
+# 特性: 支持在现有 SS 基础上单独追加 ShadowTLS，保留原配置
 # 适配: Debian/Ubuntu/CentOS/Alpine (Systemd & OpenRC)
 
 RED="\033[31m"
@@ -20,8 +22,7 @@ check_os() {
         INIT_SYSTEM="openrc"
         LIBC_TYPE="musl"
         
-        # Alpine 依赖自动补全
-        if ! command -v curl >/dev/null 2>&1 || ! command -v pidof >/dev/null 2>&1 || ! command -v netstat >/dev/null 2>&1; then
+        if ! command -v curl >/dev/null 2>&1 || ! command -v pidof >/dev/null 2>&1 || ! command -v netstat >/dev/null 2>&1 || ! command -v jq >/dev/null 2>&1; then
             echo -e "${YELLOW}[系统] 检测到依赖缺失，正在自动安装...${PLAIN}"
             apk update && apk add bash curl wget tar openssl ca-certificates jq coreutils libcap procps net-tools
             update-ca-certificates 2>/dev/null
@@ -175,10 +176,19 @@ uninstall_services() {
     [[ "$INIT_SYSTEM" == "systemd" ]] && systemctl daemon-reload
 }
 
+show_footer() {
+    echo -e ""
+    echo -e "${GREEN}==============================================${PLAIN}"
+    echo -e "${YELLOW}   脚本作者: ike${PLAIN}"
+    echo -e "${YELLOW}   交流群组: https://t.me/pbox2026${PLAIN}"
+    echo -e "${GREEN}==============================================${PLAIN}"
+    echo -e ""
+}
+
 show_menu() {
     clear
     echo -e "${GREEN}==============================================${PLAIN}"
-    echo -e "${GREEN}   Shadowsocks + Socks5 全能整合版 (v7.2)     ${PLAIN}"
+    echo -e "${GREEN}   Shadowsocks + Socks5 全能整合版 (v7.3)     ${PLAIN}"
     echo -e "${GREEN}==============================================${PLAIN}"
     echo -e "系统: ${YELLOW}$OS_TYPE${PLAIN} | 架构: ${YELLOW}$ARCH ($LIBC_TYPE)${PLAIN}"
     echo -e "----------------------------------------------"
@@ -189,15 +199,6 @@ show_menu() {
     echo -e "${GREEN}5.${PLAIN} 退出"
     echo -e "----------------------------------------------"
     read -p "请输入选项 [1-5]: " MENU_CHOICE
-}
-
-show_footer() {
-    echo -e ""
-    echo -e "${GREEN}==============================================${PLAIN}"
-    echo -e "${YELLOW}   脚本作者: ike${PLAIN}"
-    echo -e "${YELLOW}   交流群组: https://t.me/pbox2026${PLAIN}"
-    echo -e "${GREEN}==============================================${PLAIN}"
-    echo -e ""
 }
 
 install_socks5() {
@@ -214,7 +215,6 @@ install_socks5() {
 
     echo -e "${YELLOW}[安装] Gost v${GOST_VER}...${PLAIN}"
     
-    # 统一使用 v2.12.0 下载链接 (支持 amd64/arm64)
     GOST_URL="https://github.com/ginuerzh/gost/releases/download/v${GOST_VER}/gost_${GOST_VER}_linux_${GOST_ARCH}.tar.gz"
     
     wget -q "$GOST_URL" -O /tmp/gost.tar.gz
@@ -245,40 +245,67 @@ install_socks5() {
 }
 
 configure_ss() {
-    echo -e "\n${YELLOW}[配置] 加密协议:${PLAIN}"
-    echo -e "  1) 2022-blake3-aes-128-gcm ${GREEN}(推荐)${PLAIN}"
-    echo -e "  2) 2022-blake3-aes-256-gcm"
-    echo -e "  3) 2022-blake3-chacha20-poly1305"
-    echo -e "  4) aes-128-gcm (经典)"
-    echo -e "  5) aes-256-gcm (经典)"
-    echo -e "  6) chacha20-ietf-poly1305 (经典)"
+    # 智能增量检测逻辑
+    SKIP_SS_INSTALL="false"
     
-    read -p "选项 [1-6] (默认: 1): " M_NUM
-    case "${M_NUM:-1}" in
-        1) METHOD="2022-blake3-aes-128-gcm"; KEY_LEN=16 ;;
-        2) METHOD="2022-blake3-aes-256-gcm"; KEY_LEN=32 ;;
-        3) METHOD="2022-blake3-chacha20-poly1305"; KEY_LEN=32 ;;
-        4) METHOD="aes-128-gcm"; KEY_LEN=16 ;;
-        5) METHOD="aes-256-gcm"; KEY_LEN=32 ;;
-        6) METHOD="chacha20-ietf-poly1305"; KEY_LEN=32 ;;
-        *) METHOD="2022-blake3-aes-128-gcm"; KEY_LEN=16 ;;
-    esac
-
-    while true; do
-        read -p "SS 端口 (默认: 9000): " IN_PORT
-        SS_PORT=${IN_PORT:-9000}
-        if check_port $SS_PORT; then break; else echo -e "${RED}端口占用！${PLAIN}"; fi
-    done
-
-    if [[ "$OS_TYPE" == "alpine" ]]; then
-        echo -e "${YELLOW}Alpine 环境已自动关闭 Multiplex。${PLAIN}"
-        MUX_CONF=""
-    else
-        read -p "开启 Multiplex? [y/n] (默认: n): " EN_MUX
-        [[ "${EN_MUX:-n}" =~ ^[yY]$ ]] && MUX_CONF=', "multiplex": { "enabled": true }'
+    if [[ "$MENU_CHOICE" == "2" && -f "$CONFIG_FILE" ]]; then
+        echo -e "${YELLOW}[检测] 发现已存在的 Shadowsocks 配置文件。${PLAIN}"
+        echo -e "您可以选择保留现有 SS 配置，仅安装 ShadowTLS 进行嫁接。"
+        read -p "是否复用现有 SS 配置? [y/n] (默认: y): " USE_EXIST
+        
+        if [[ "${USE_EXIST:-y}" =~ ^[yY]$ ]]; then
+            echo -e "${GREEN}[信息] 正在读取现有配置...${PLAIN}"
+            SS_PORT=$(jq -r '.server_port' $CONFIG_FILE)
+            SS_PASSWORD=$(jq -r '.password' $CONFIG_FILE)
+            METHOD=$(jq -r '.method' $CONFIG_FILE)
+            
+            if [[ -z "$SS_PORT" || "$SS_PORT" == "null" ]]; then
+                echo -e "${RED}[错误] 配置文件读取失败，将进行全新安装。${PLAIN}"
+            else
+                SKIP_SS_INSTALL="true"
+                echo -e "${GREEN}[信息] 读取成功! 将使用端口: $SS_PORT${PLAIN}"
+            fi
+        fi
     fi
-    SS_PASSWORD=$(openssl rand -base64 $KEY_LEN)
+
+    # 如果不跳过 SS 安装，则进行标准配置流程
+    if [[ "$SKIP_SS_INSTALL" == "false" ]]; then
+        echo -e "\n${YELLOW}[配置] 加密协议:${PLAIN}"
+        echo -e "  1) 2022-blake3-aes-128-gcm ${GREEN}(推荐)${PLAIN}"
+        echo -e "  2) 2022-blake3-aes-256-gcm"
+        echo -e "  3) 2022-blake3-chacha20-poly1305"
+        echo -e "  4) aes-128-gcm (经典)"
+        echo -e "  5) aes-256-gcm (经典)"
+        echo -e "  6) chacha20-ietf-poly1305 (经典)"
+        
+        read -p "选项 [1-6] (默认: 1): " M_NUM
+        case "${M_NUM:-1}" in
+            1) METHOD="2022-blake3-aes-128-gcm"; KEY_LEN=16 ;;
+            2) METHOD="2022-blake3-aes-256-gcm"; KEY_LEN=32 ;;
+            3) METHOD="2022-blake3-chacha20-poly1305"; KEY_LEN=32 ;;
+            4) METHOD="aes-128-gcm"; KEY_LEN=16 ;;
+            5) METHOD="aes-256-gcm"; KEY_LEN=32 ;;
+            6) METHOD="chacha20-ietf-poly1305"; KEY_LEN=32 ;;
+            *) METHOD="2022-blake3-aes-128-gcm"; KEY_LEN=16 ;;
+        esac
+
+        while true; do
+            read -p "SS 端口 (默认: 9000): " IN_PORT
+            SS_PORT=${IN_PORT:-9000}
+            if check_port $SS_PORT; then break; else echo -e "${RED}端口占用！${PLAIN}"; fi
+        done
+
+        if [[ "$OS_TYPE" == "alpine" ]]; then
+            echo -e "${YELLOW}Alpine 环境已自动关闭 Multiplex。${PLAIN}"
+            MUX_CONF=""
+        else
+            read -p "开启 Multiplex? [y/n] (默认: n): " EN_MUX
+            [[ "${EN_MUX:-n}" =~ ^[yY]$ ]] && MUX_CONF=', "multiplex": { "enabled": true }'
+        fi
+        SS_PASSWORD=$(openssl rand -base64 $KEY_LEN)
+    fi
     
+    # 无论是否复用 SS，都需要配置 TLS 参数
     if [[ "$MENU_CHOICE" == "2" ]]; then
         while true; do
             read -p "伪装域名 (默认: www.microsoft.com): " IN_DOM
@@ -292,6 +319,11 @@ configure_ss() {
 }
 
 install_ss() {
+    if [[ "$SKIP_SS_INSTALL" == "true" ]]; then
+        echo -e "${GREEN}[跳过] 检测到增量模式，跳过 Shadowsocks-Rust 重新安装。${PLAIN}"
+        return 0
+    fi
+
     echo -e "${YELLOW}[安装] SS-Rust ($LIBC_TYPE)...${PLAIN}"
     SS_TAG=$(curl -s https://api.github.com/repos/shadowsocks/shadowsocks-rust/releases/latest | grep 'tag_name' | cut -d\" -f4)
     if [[ -z "$SS_TAG" ]]; then SS_TAG=$FALLBACK_SS_VER; fi
@@ -350,7 +382,6 @@ show_ss_result() {
         
         # 构建通用 SIP 链接
         PLUGIN_STR="shadow-tls;host=${FAKE_DOMAIN};password=${TLS_PASSWORD}"
-        # 进行简单的 URL 编码 ( ; -> %3B, = -> %3D )
         PLUGIN_ENCODED=$(echo -n "$PLUGIN_STR" | sed 's/;/\\%3B/g' | sed 's/=/\\%3D/g')
         SIP_LINK="ss://${USER_INFO}@${PUBLIC_IP}:${TLS_PORT}/?plugin=${PLUGIN_ENCODED}#ShadowTLS-SIP"
         

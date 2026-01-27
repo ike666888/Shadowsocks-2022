@@ -1,6 +1,4 @@
 #!/bin/bash
-# Shadowsocks + Socks5 一键安装脚本 (v7.3 智能增量版)
-# 特性: 支持在现有 SS 基础上单独追加 ShadowTLS，保留原配置
 # 适配: Debian/Ubuntu/CentOS/Alpine (Systemd & OpenRC)
 
 RED="\033[31m"
@@ -163,7 +161,7 @@ uninstall_services() {
             stop_svc ss-rust
             stop_svc shadow-tls
             rm -f /usr/local/bin/ssserver /usr/local/bin/shadow-tls $CONFIG_FILE
-            echo -e "${GREEN}SS 组件已卸载。${PLAIN}"
+            echo -e "${GREEN}Shadowsocks & ShadowTLS 已卸载。${PLAIN}"
             ;;
     esac
     case "${UN_OPT:-3}" in
@@ -188,7 +186,7 @@ show_footer() {
 show_menu() {
     clear
     echo -e "${GREEN}==============================================${PLAIN}"
-    echo -e "${GREEN}   Shadowsocks + Socks5 全能整合版 (v7.3)     ${PLAIN}"
+    echo -e "${GREEN}   Shadowsocks + Socks5 全能整合版 (v7.4)     ${PLAIN}"
     echo -e "${GREEN}==============================================${PLAIN}"
     echo -e "系统: ${YELLOW}$OS_TYPE${PLAIN} | 架构: ${YELLOW}$ARCH ($LIBC_TYPE)${PLAIN}"
     echo -e "----------------------------------------------"
@@ -245,7 +243,6 @@ install_socks5() {
 }
 
 configure_ss() {
-    # 智能增量检测逻辑
     SKIP_SS_INSTALL="false"
     
     if [[ "$MENU_CHOICE" == "2" && -f "$CONFIG_FILE" ]]; then
@@ -268,7 +265,6 @@ configure_ss() {
         fi
     fi
 
-    # 如果不跳过 SS 安装，则进行标准配置流程
     if [[ "$SKIP_SS_INSTALL" == "false" ]]; then
         echo -e "\n${YELLOW}[配置] 加密协议:${PLAIN}"
         echo -e "  1) 2022-blake3-aes-128-gcm ${GREEN}(推荐)${PLAIN}"
@@ -305,7 +301,6 @@ configure_ss() {
         SS_PASSWORD=$(openssl rand -base64 $KEY_LEN)
     fi
     
-    # 无论是否复用 SS，都需要配置 TLS 参数
     if [[ "$MENU_CHOICE" == "2" ]]; then
         while true; do
             read -p "伪装域名 (默认: www.microsoft.com): " IN_DOM
@@ -375,12 +370,10 @@ show_ss_result() {
         echo -e "ShadowTLS 密码: ${TLS_PASSWORD}"
         echo -e "伪装域名: ${FAKE_DOMAIN}"
         
-        # 构建 Shadowrocket 链接
         ROCKET_JSON="{\"version\":\"3\",\"host\":\"${FAKE_DOMAIN}\",\"password\":\"${TLS_PASSWORD}\"}"
         ROCKET_PARAM=$(echo -n "$ROCKET_JSON" | base64 -w 0)
         ROCKET_LINK="ss://${USER_INFO}@${PUBLIC_IP}:${TLS_PORT}?shadow-tls=${ROCKET_PARAM}#ShadowTLS"
         
-        # 构建通用 SIP 链接
         PLUGIN_STR="shadow-tls;host=${FAKE_DOMAIN};password=${TLS_PASSWORD}"
         PLUGIN_ENCODED=$(echo -n "$PLUGIN_STR" | sed 's/;/\\%3B/g' | sed 's/=/\\%3D/g')
         SIP_LINK="ss://${USER_INFO}@${PUBLIC_IP}:${TLS_PORT}/?plugin=${PLUGIN_ENCODED}#ShadowTLS-SIP"

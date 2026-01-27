@@ -1,4 +1,5 @@
 #!/bin/bash
+# 适配: Debian/Ubuntu/CentOS/Alpine (Systemd & OpenRC)
 
 RED="\033[31m"
 GREEN="\033[32m"
@@ -19,9 +20,10 @@ check_os() {
         INIT_SYSTEM="openrc"
         LIBC_TYPE="musl"
         
-        if ! command -v curl >/dev/null 2>&1 || ! command -v pidof >/dev/null 2>&1; then
-            echo -e "${YELLOW}[系统] 正在补全 Alpine 缺失依赖...${PLAIN}"
-            apk update && apk add bash curl wget tar openssl ca-certificates jq coreutils libcap procps
+        # Alpine 依赖自动补全
+        if ! command -v curl >/dev/null 2>&1 || ! command -v pidof >/dev/null 2>&1 || ! command -v netstat >/dev/null 2>&1; then
+            echo -e "${YELLOW}[系统] 检测到依赖缺失，正在自动安装...${PLAIN}"
+            apk update && apk add bash curl wget tar openssl ca-certificates jq coreutils libcap procps net-tools
             update-ca-certificates 2>/dev/null
         fi
         
@@ -68,11 +70,11 @@ prepare_system() {
     if [[ "$OS_TYPE" == "alpine" ]]; then
         modprobe tcp_bbr 2>/dev/null || true
     elif [[ "$OS_TYPE" =~ (ubuntu|debian|kali) ]]; then
-        echo -e "${YELLOW}[系统] 安装依赖...${PLAIN}"
-        apt update -q && apt install -y wget tar openssl xz-utils curl jq lsof gzip
+        echo -e "${YELLOW}[系统] 检查并安装依赖...${PLAIN}"
+        apt update -q && apt install -y wget tar openssl xz-utils curl jq lsof gzip net-tools
     elif [[ "$OS_TYPE" =~ (centos|rhel|almalinux|rocky) ]]; then
-        echo -e "${YELLOW}[系统] 安装依赖...${PLAIN}"
-        yum install -y epel-release && yum install -y wget tar openssl xz curl jq lsof firewalld gzip
+        echo -e "${YELLOW}[系统] 检查并安装依赖...${PLAIN}"
+        yum install -y epel-release && yum install -y wget tar openssl xz curl jq lsof firewalld gzip net-tools
     fi
 
     if [[ "$OS_TYPE" != "alpine" ]] && [[ "$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null)" != "bbr" ]]; then
@@ -176,7 +178,7 @@ uninstall_services() {
 show_menu() {
     clear
     echo -e "${GREEN}==============================================${PLAIN}"
-    echo -e "${GREEN}   Shadowsocks + Socks5 全能整合版 (v6.7)     ${PLAIN}"
+    echo -e "${GREEN}   Shadowsocks + Socks5 全能整合版 (v7.2)     ${PLAIN}"
     echo -e "${GREEN}==============================================${PLAIN}"
     echo -e "系统: ${YELLOW}$OS_TYPE${PLAIN} | 架构: ${YELLOW}$ARCH ($LIBC_TYPE)${PLAIN}"
     echo -e "----------------------------------------------"
@@ -210,33 +212,24 @@ install_socks5() {
     read -p "密码 (默认: 随机): " IN_PASS
     SOCK_PASS=${IN_PASS:-$(openssl rand -hex 4)}
 
-    echo -e "${YELLOW}[安装] Gost...${PLAIN}"
-    if [[ "$OS_TYPE" == "alpine" ]]; then
-        local G_ARCH=$GOST_ARCH
-        [[ "$G_ARCH" == "arm64" ]] && G_ARCH="armv8"
-        
-        GOST_URL="https://github.com/ginuerzh/gost/releases/download/v2.11.5/gost-linux-${G_ARCH}-2.11.5.gz"
-        wget -q "$GOST_URL" -O /tmp/gost.gz
-        
-        if [[ ! -s /tmp/gost.gz ]]; then
-             echo -e "${RED}下载失败！请检查网络或架构适配。${PLAIN}"; return 1
-        fi
-        gzip -d -f /tmp/gost.gz && mv /tmp/gost /usr/local/bin/gost
-    else
-        GOST_URL="https://github.com/ginuerzh/gost/releases/download/v${GOST_VER}/gost_${GOST_VER}_linux_${GOST_ARCH}.tar.gz"
-        wget -q "$GOST_URL" -O /tmp/gost.tar.gz
-        if [[ ! -s /tmp/gost.tar.gz ]]; then
-             echo -e "${RED}下载失败！请检查网络。${PLAIN}"; return 1
-        fi
-        tar -xzf /tmp/gost.tar.gz -C /tmp && mv /tmp/gost /usr/local/bin/gost
+    echo -e "${YELLOW}[安装] Gost v${GOST_VER}...${PLAIN}"
+    
+    # 统一使用 v2.12.0 下载链接 (支持 amd64/arm64)
+    GOST_URL="https://github.com/ginuerzh/gost/releases/download/v${GOST_VER}/gost_${GOST_VER}_linux_${GOST_ARCH}.tar.gz"
+    
+    wget -q "$GOST_URL" -O /tmp/gost.tar.gz
+    if [[ ! -s /tmp/gost.tar.gz ]]; then
+         echo -e "${RED}下载失败！请检查网络。URL: $GOST_URL${PLAIN}"; return 1
     fi
+    
+    tar -xzf /tmp/gost.tar.gz -C /tmp && mv /tmp/gost /usr/local/bin/gost
     chmod +x /usr/local/bin/gost
 
     create_service "gost" "/usr/local/bin/gost" "-L ${SOCK_USER}:${SOCK_PASS}@:${SOCK_PORT} socks5"
     
     sleep 2
     if ! pidof gost > /dev/null && ! netstat -nltp 2>/dev/null | grep -q ":$SOCK_PORT"; then
-        echo -e "${RED}警告：Gost 服务检测失败，请运行 cat /var/log/gost.err 排查。${PLAIN}"
+        echo -e "${RED}警告：Gost 服务启动检测异常，请运行 cat /var/log/gost.err 排查。${PLAIN}"
     fi
 
     PUBLIC_IP=$(curl -s4 ifconfig.me)
@@ -341,17 +334,30 @@ show_ss_result() {
     USER_INFO=$(echo -n "${METHOD}:${SS_PASSWORD}" | base64 -w 0)
     
     echo -e "\n${GREEN}>>> SS/TLS 部署成功 ($OS_TYPE) <<<${PLAIN}"
-    echo -e "IP: ${PUBLIC_IP}  端口: ${TLS_PORT}"
-    echo -e "密码: ${SS_PASSWORD}"
+    echo -e "IP: ${PUBLIC_IP}"
+    echo -e "端口: ${TLS_PORT}"
+    echo -e "SS 密码: ${SS_PASSWORD}"
     echo -e "加密: ${METHOD}"
     
     if [[ "$MENU_CHOICE" == "2" ]]; then
+        echo -e "ShadowTLS 密码: ${TLS_PASSWORD}"
+        echo -e "伪装域名: ${FAKE_DOMAIN}"
+        
+        # 构建 Shadowrocket 链接
         ROCKET_JSON="{\"version\":\"3\",\"host\":\"${FAKE_DOMAIN}\",\"password\":\"${TLS_PASSWORD}\"}"
         ROCKET_PARAM=$(echo -n "$ROCKET_JSON" | base64 -w 0)
         ROCKET_LINK="ss://${USER_INFO}@${PUBLIC_IP}:${TLS_PORT}?shadow-tls=${ROCKET_PARAM}#ShadowTLS"
-        echo -e "\n${YELLOW}[小火箭]${PLAIN} ${ROCKET_LINK}"
+        
+        # 构建通用 SIP 链接
+        PLUGIN_STR="shadow-tls;host=${FAKE_DOMAIN};password=${TLS_PASSWORD}"
+        # 进行简单的 URL 编码 ( ; -> %3B, = -> %3D )
+        PLUGIN_ENCODED=$(echo -n "$PLUGIN_STR" | sed 's/;/\\%3B/g' | sed 's/=/\\%3D/g')
+        SIP_LINK="ss://${USER_INFO}@${PUBLIC_IP}:${TLS_PORT}/?plugin=${PLUGIN_ENCODED}#ShadowTLS-SIP"
+        
+        echo -e "\n${YELLOW}[Shadowrocket 链接]${PLAIN}\n${ROCKET_LINK}"
+        echo -e "\n${YELLOW}[SIP 通用链接 (v2rayN/NekoBox)]${PLAIN}\n${SIP_LINK}"
     else
-        echo -e "\n${YELLOW}[SS链接]${PLAIN} ss://${USER_INFO}@${PUBLIC_IP}:${SS_PORT}#SS-Node"
+        echo -e "\n${YELLOW}[SS 链接]${PLAIN}\nss://${USER_INFO}@${PUBLIC_IP}:${SS_PORT}#SS-Node"
     fi
     show_footer
 }

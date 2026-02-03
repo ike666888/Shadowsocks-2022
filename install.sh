@@ -62,12 +62,22 @@ check_port() {
 }
 
 install_singbox() {
+    if [[ -f "$BIN_PATH" ]]; then
+        echo -e "${GREEN}[核心] Sing-box 已安装，跳过下载。${PLAIN}"
+        mkdir -p $CONFIG_DIR
+        if [[ ! -f "$CONFIG_FILE" ]]; then
+            echo '{"log": {"level": "info", "timestamp": true}, "inbounds": [], "outbounds": [{"type": "direct"}]}' > "$CONFIG_FILE"
+        fi
+        create_service
+        return 0
+    fi
+
     echo -e "${YELLOW}[核心] 获取 Sing-box 最新版本...${PLAIN}"
     LATEST_URL=$(curl -s https://api.github.com/repos/SagerNet/sing-box/releases/latest | grep "browser_download_url" | grep "linux-${SB_ARCH}.tar.gz" | cut -d '"' -f 4 | head -n 1)
     VERSION=$(echo $LATEST_URL | awk -F'sing-box-' '{print $2}' | awk -F'-linux' '{print $1}')
     
     if [[ -z "$LATEST_URL" ]]; then
-        echo -e "${RED}[错误] 无法获取最新版本下载链接，请检查网络。${PLAIN}"; return 1
+        echo -e "${RED}[错误] 无法获取下载链接。${PLAIN}"; return 1
     fi
 
     echo -e "${GREEN}[核心] 正在下载 Sing-box v${VERSION}...${PLAIN}"
@@ -167,11 +177,19 @@ configure_ss() {
     if [[ "$SKIP_SS" != "true" ]]; then
         echo -e "\n${YELLOW}[配置] 加密协议:${PLAIN}"
         echo -e "  1) 2022-blake3-aes-128-gcm ${GREEN}(推荐)${PLAIN}"
-        echo -e "  2) aes-128-gcm (经典)"
+        echo -e "  2) 2022-blake3-aes-256-gcm"
+        echo -e "  3) 2022-blake3-chacha20-poly1305"
+        echo -e "  4) aes-128-gcm (经典)"
+        echo -e "  5) aes-256-gcm (经典)"
+        echo -e "  6) chacha20-ietf-poly1305 (经典)"
         read -p "选项 (默认: 1): " M_OPT
         case "${M_OPT:-1}" in
             1) SS_METHOD="2022-blake3-aes-128-gcm";;
-            2) SS_METHOD="aes-128-gcm";;
+            2) SS_METHOD="2022-blake3-aes-256-gcm";;
+            3) SS_METHOD="2022-blake3-chacha20-poly1305";;
+            4) SS_METHOD="aes-128-gcm";;
+            5) SS_METHOD="aes-256-gcm";;
+            6) SS_METHOD="chacha20-ietf-poly1305";;
             *) SS_METHOD="2022-blake3-aes-128-gcm";;
         esac
         
@@ -230,7 +248,13 @@ install_ss_core() {
 }
 
 view_config() {
-    if [[ ! -f "$CONFIG_FILE" ]]; then echo -e "${RED}未找到配置文件${PLAIN}"; return; fi
+    if [[ ! -f "$CONFIG_FILE" ]]; then 
+        echo -e "${RED}错误：未找到配置文件，请先安装协议！${PLAIN}"
+        read -p "按回车键返回主菜单..."
+        show_menu
+        return
+    fi
+    
     IP=$(curl -s4 ifconfig.me)
     
     echo -e "\n${GREEN}========= 当前配置信息 =========${PLAIN}"
@@ -275,8 +299,10 @@ view_config() {
             PLUGIN_ENC=$(echo -n "$PLUGIN" | sed 's/;/\\%3B/g;s/=/\\%3D/g')
             SIP="ss://${USER_INFO}@${IP}:${TP}/?plugin=${PLUGIN_ENC}#ShadowTLS-SIP"
             
-            echo -e "Shadowrocket: ${LINK}"
-            echo -e "v2rayN/Neko:  ${SIP}"
+            echo -e "\n${GREEN}[Shadowrocket]${PLAIN}"
+            echo -e "${LINK}"
+            echo -e "\n${GREEN}[v2rayN / NekoBox / SIP]${PLAIN}"
+            echo -e "${SIP}"
         else
             echo -e "\n${YELLOW}--- Shadowsocks ---${PLAIN}"
             echo -e "地址: ${IP}:${SSP}"
@@ -320,7 +346,7 @@ show_menu() {
     clear
     install_shortcut
     echo -e "${GREEN}==============================================${PLAIN}"
-    echo -e "${GREEN}        Shadowsocks+SOCKS5 【sing-box】       ${PLAIN}"
+    echo -e "${GREEN}   Shadowsocks + Socks5 一键脚本              ${PLAIN}"
     echo -e "${GREEN}==============================================${PLAIN}"
     echo -e "系统: ${YELLOW}$OS_TYPE${PLAIN} | 架构: ${YELLOW}$ARCH${PLAIN}"
     echo -e "----------------------------------------------"

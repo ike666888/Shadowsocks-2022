@@ -63,7 +63,6 @@ check_port() {
 
 install_singbox() {
     if [[ -f "$BIN_PATH" ]]; then
-        echo -e "${GREEN}[核心] Sing-box 已安装，跳过下载。${PLAIN}"
         mkdir -p $CONFIG_DIR
         if [[ ! -f "$CONFIG_FILE" ]]; then
             echo '{"log": {"level": "info", "timestamp": true}, "inbounds": [], "outbounds": [{"type": "direct"}]}' > "$CONFIG_FILE"

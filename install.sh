@@ -320,7 +320,7 @@ show_menu() {
     clear
     install_shortcut
     echo -e "${GREEN}==============================================${PLAIN}"
-    echo -e "${GREEN}   Sing-box 全能脚本 (v8.1) | 命令增强版      ${PLAIN}"
+    echo -e "${GREEN}        Shadowsocks+SOCKS5 【sing-box】       ${PLAIN}"
     echo -e "${GREEN}==============================================${PLAIN}"
     echo -e "系统: ${YELLOW}$OS_TYPE${PLAIN} | 架构: ${YELLOW}$ARCH${PLAIN}"
     echo -e "----------------------------------------------"

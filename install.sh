@@ -8,7 +8,8 @@ PLAIN="\033[0m"
 CONFIG_DIR="/etc/sing-box"
 CONFIG_FILE="${CONFIG_DIR}/config.json"
 BIN_PATH="/usr/local/bin/sing-box"
-SHORTCUT_PATH="/usr/local/bin/pbox"
+SHORTCUT_PATH="/usr/local/bin/sb"
+IPV6_PREFERRED="false"
 
 check_os() {
     if [ -f /etc/alpine-release ]; then
@@ -39,6 +40,49 @@ EOF
     chmod +x "$SHORTCUT_PATH"
 }
 
+ensure_config_security() {
+    mkdir -p "$CONFIG_DIR"
+    chmod 700 "$CONFIG_DIR"
+
+    if [[ -f "$CONFIG_FILE" ]]; then
+        chmod 600 "$CONFIG_FILE"
+        chown root:root "$CONFIG_FILE" 2>/dev/null || true
+    fi
+}
+
+check_ipv6_status() {
+    IPV6_DISABLED="$(sysctl -n net.ipv6.conf.all.disable_ipv6 2>/dev/null || echo 1)"
+    IPV6_GLOBAL_ADDR="$(ip -6 addr show scope global 2>/dev/null | awk '/inet6/{print $2}' | head -n 1 | cut -d'/' -f1)"
+
+    if [[ "$IPV6_DISABLED" != "0" ]]; then
+        echo -e "${RED}[IPv6] 系统未开启 IPv6 (net.ipv6.conf.all.disable_ipv6=${IPV6_DISABLED})${PLAIN}"
+        return 1
+    fi
+
+    if [[ -z "$IPV6_GLOBAL_ADDR" ]]; then
+        echo -e "${RED}[IPv6] 未检测到全局 IPv6 地址，无法生成可用节点${PLAIN}"
+        return 1
+    fi
+
+    echo -e "${GREEN}[IPv6] 可用，检测到地址: ${IPV6_GLOBAL_ADDR}${PLAIN}"
+    return 0
+}
+
+validate_config_file() {
+    if ! jq empty "$CONFIG_FILE" >/dev/null 2>&1; then
+        echo -e "${RED}[错误] 配置文件 JSON 无效: $CONFIG_FILE${PLAIN}"
+        return 1
+    fi
+
+    if command -v "$BIN_PATH" >/dev/null 2>&1; then
+        if ! "$BIN_PATH" check -c "$CONFIG_FILE" >/dev/null 2>&1; then
+            echo -e "${RED}[错误] sing-box 校验配置失败，请检查参数${PLAIN}"
+            return 1
+        fi
+    fi
+    return 0
+}
+
 prepare_system() {
     echo -e "${YELLOW}[系统] 环境: $OS_TYPE ($INIT_SYSTEM) / 核心: Sing-box${PLAIN}"
     install_shortcut
@@ -67,6 +111,7 @@ install_singbox() {
         if [[ ! -f "$CONFIG_FILE" ]]; then
             echo '{"log": {"level": "info", "timestamp": true}, "inbounds": [], "outbounds": [{"type": "direct"}]}' > "$CONFIG_FILE"
         fi
+        ensure_config_security
         create_service
         return 0
     fi
@@ -92,6 +137,7 @@ install_singbox() {
     if [[ ! -f "$CONFIG_FILE" ]]; then
         echo '{"log": {"level": "info", "timestamp": true}, "inbounds": [], "outbounds": [{"type": "direct"}]}' > "$CONFIG_FILE"
     fi
+    ensure_config_security
     create_service
 }
 
@@ -108,6 +154,11 @@ AmbientCapabilities=CAP_NET_ADMIN CAP_NET_BIND_SERVICE
 ExecStart=$BIN_PATH run -c $CONFIG_FILE
 Restart=on-failure
 RestartSec=10
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+ReadWritePaths=$CONFIG_DIR
 LimitNOFILE=infinity
 [Install]
 WantedBy=multi-user.target
@@ -129,6 +180,8 @@ EOF
 }
 
 update_config() {
+    ensure_config_security
+    validate_config_file || return 1
     if [[ "$INIT_SYSTEM" == "systemd" ]]; then systemctl restart sing-box
     else rc-service sing-box restart; fi
 }
@@ -242,7 +295,7 @@ install_ss_core() {
            }]' $CONFIG_FILE > $tmp && mv $tmp $CONFIG_FILE
     fi
 
-    update_config
+    update_config || return 1
     view_config
 }
 
@@ -253,10 +306,29 @@ view_config() {
         show_menu
         return
     fi
-    
-    IP=$(curl -s4 ifconfig.me)
+
+    PUBLIC_IPV4="$(curl -s4 --max-time 5 ifconfig.me 2>/dev/null)"
+    PUBLIC_IPV6="$(curl -s6 --max-time 5 ifconfig.me 2>/dev/null)"
+
+    if [[ -z "$PUBLIC_IPV6" ]]; then
+        PUBLIC_IPV6="$(ip -6 addr show scope global 2>/dev/null | awk '/inet6/{print $2}' | head -n 1 | cut -d'/' -f1)"
+    fi
+    [[ -z "$PUBLIC_IPV4" ]] && PUBLIC_IPV4="$(hostname -I | awk '{print $1}')"
+
+    IP="$PUBLIC_IPV4"
+    [[ "$IPV6_PREFERRED" == "true" && -n "$PUBLIC_IPV6" ]] && IP="$PUBLIC_IPV6"
+
+    HOST_FOR_URL="$IP"
+    [[ "$IP" =~ : ]] && HOST_FOR_URL="[${IP}]"
+
+    IPV4_HOST=""
+    IPV6_HOST=""
+    [[ -n "$PUBLIC_IPV4" ]] && IPV4_HOST="$PUBLIC_IPV4"
+    [[ -n "$PUBLIC_IPV6" ]] && IPV6_HOST="[${PUBLIC_IPV6}]"
     
     echo -e "\n${GREEN}========= 当前配置信息 =========${PLAIN}"
+    [[ -n "$PUBLIC_IPV4" ]] && echo -e "IPv4: ${PUBLIC_IPV4}"
+    [[ -n "$PUBLIC_IPV6" ]] && echo -e "IPv6: ${PUBLIC_IPV6}"
     
     S_IN=$(jq -c '.inbounds[] | select(.tag=="socks-in")' $CONFIG_FILE 2>/dev/null)
     if [[ -n "$S_IN" ]]; then
@@ -267,7 +339,8 @@ view_config() {
         echo -e "地址: ${IP}:${SP}"
         echo -e "用户: ${SU}"
         echo -e "密码: ${SW}"
-        echo -e "链接: socks5://${SU}:${SW}@${IP}:${SP}"
+        [[ -n "$IPV4_HOST" ]] && echo -e "IPv4链接: socks5://${SU}:${SW}@${IPV4_HOST}:${SP}"
+        [[ -n "$IPV6_HOST" ]] && echo -e "IPv6链接: socks5://${SU}:${SW}@${IPV6_HOST}:${SP}"
     fi
 
     SS_IN=$(jq -c '.inbounds[] | select(.tag=="ss-in")' $CONFIG_FILE 2>/dev/null)
@@ -292,27 +365,39 @@ view_config() {
             
             JSON="{\"version\":\"3\",\"host\":\"${TH}\",\"password\":\"${TW}\"}"
             PARAM=$(echo -n "$JSON" | base64 -w 0)
-            LINK="ss://${USER_INFO}@${IP}:${TP}?shadow-tls=${PARAM}#ShadowTLS"
             
-            PLUGIN="shadow-tls;host=${TH};password=${TW}"
-            PLUGIN_ENC=$(echo -n "$PLUGIN" | sed 's/;/\\%3B/g;s/=/\\%3D/g')
-            SIP="ss://${USER_INFO}@${IP}:${TP}/?plugin=${PLUGIN_ENC}#ShadowTLS-SIP"
-            
+            if [[ -n "$IPV4_HOST" ]]; then
+                LINK4="ss://${USER_INFO}@${IPV4_HOST}:${TP}?shadow-tls=${PARAM}#ShadowTLS-IPv4"
+                PLUGIN="shadow-tls;host=${TH};password=${TW}"
+                PLUGIN_ENC=$(echo -n "$PLUGIN" | sed 's/;/\%3B/g;s/=/\%3D/g')
+                SIP4="ss://${USER_INFO}@${IPV4_HOST}:${TP}/?plugin=${PLUGIN_ENC}#ShadowTLS-SIP-IPv4"
+            fi
+
+            if [[ -n "$IPV6_HOST" ]]; then
+                LINK6="ss://${USER_INFO}@${IPV6_HOST}:${TP}?shadow-tls=${PARAM}#ShadowTLS-IPv6"
+                PLUGIN="shadow-tls;host=${TH};password=${TW}"
+                PLUGIN_ENC=$(echo -n "$PLUGIN" | sed 's/;/\%3B/g;s/=/\%3D/g')
+                SIP6="ss://${USER_INFO}@${IPV6_HOST}:${TP}/?plugin=${PLUGIN_ENC}#ShadowTLS-SIP-IPv6"
+            fi
+
             echo -e "\n${GREEN}[Shadowrocket]${PLAIN}"
-            echo -e "${LINK}"
+            [[ -n "$LINK4" ]] && echo -e "${LINK4}"
+            [[ -n "$LINK6" ]] && echo -e "${LINK6}"
             echo -e "\n${GREEN}[v2rayN / NekoBox / SIP]${PLAIN}"
-            echo -e "${SIP}"
+            [[ -n "$SIP4" ]] && echo -e "${SIP4}"
+            [[ -n "$SIP6" ]] && echo -e "${SIP6}"
         else
             echo -e "\n${YELLOW}--- Shadowsocks ---${PLAIN}"
             echo -e "地址: ${IP}:${SSP}"
             echo -e "密码: ${SSW}"
             echo -e "加密: ${SSM}"
-            echo -e "链接: ss://${USER_INFO}@${IP}:${SSP}#SS-Node"
+            [[ -n "$IPV4_HOST" ]] && echo -e "IPv4链接: ss://${USER_INFO}@${IPV4_HOST}:${SSP}#SS-Node-IPv4"
+            [[ -n "$IPV6_HOST" ]] && echo -e "IPv6链接: ss://${USER_INFO}@${IPV6_HOST}:${SSP}#SS-Node-IPv6"
+            [[ "$IPV6_PREFERRED" == "true" ]] && echo -e "模式: IPv6 + SS2022"
         fi
     fi
     show_footer
 }
-
 uninstall() {
     echo -e "${YELLOW}[卸载] 选择:${PLAIN}"
     echo " 1) 卸载 Shadowsocks/TLS"
@@ -337,7 +422,7 @@ show_footer() {
     echo -e "${YELLOW}   脚本作者: ike${PLAIN}"
     echo -e "${YELLOW}   交流群组: https://t.me/pbox2026${PLAIN}"
     echo -e "${GREEN}==============================================${PLAIN}"
-    echo -e "${GREEN}   快捷命令: 输入 ${YELLOW}pbox${GREEN} 可随时查看链接${PLAIN}"
+    echo -e "${GREEN}   快捷命令: 输入 ${YELLOW}sb${GREEN} 可随时查看链接${PLAIN}"
     echo -e "${GREEN}==============================================${PLAIN}\n"
 }
 
@@ -345,25 +430,36 @@ show_menu() {
     clear
     install_shortcut
     echo -e "${GREEN}==============================================${PLAIN}"
-    echo -e "${GREEN}   Shadowsocks + Socks5 一键脚本              ${PLAIN}"
+    echo -e "${GREEN}   Shadowsocks + Socks5 一键脚本 (sb)              ${PLAIN}"
     echo -e "${GREEN}==============================================${PLAIN}"
     echo -e "系统: ${YELLOW}$OS_TYPE${PLAIN} | 架构: ${YELLOW}$ARCH${PLAIN}"
     echo -e "----------------------------------------------"
     echo -e "${GREEN}1.${PLAIN} 安装 Shadowsocks 2022"
     echo -e "${GREEN}2.${PLAIN} 安装 Shadowsocks 2022 + ShadowTLS"
-    echo -e "${GREEN}3.${PLAIN} 安装 SOCKS5 代理"
-    echo -e "${GREEN}4.${PLAIN} 查看当前配置链接"
-    echo -e "${RED}5.${PLAIN} 卸载服务"
-    echo -e "${GREEN}6.${PLAIN} 退出"
+    echo -e "${GREEN}3.${PLAIN} 安装 IPv6 + Shadowsocks 2022"
+    echo -e "${GREEN}4.${PLAIN} 安装 SOCKS5 代理"
+    echo -e "${GREEN}5.${PLAIN} 查看当前配置链接"
+    echo -e "${RED}6.${PLAIN} 卸载服务"
+    echo -e "${GREEN}7.${PLAIN} 退出"
     echo -e "----------------------------------------------"
-    read -p "请输入选项 [1-6]: " MENU_CHOICE
+    read -p "请输入选项 [1-7]: " MENU_CHOICE
 
     case "$MENU_CHOICE" in
         1|2) prepare_system; configure_ss; install_ss_core ;;
-        3) prepare_system; install_socks5 ;;
-        4) prepare_system; view_config ;;
-        5) uninstall ;;
-        6) exit 0 ;;
+        3)
+            prepare_system
+            if check_ipv6_status; then
+                IPV6_PREFERRED="true"
+                configure_ss
+                install_ss_core
+            else
+                echo -e "${YELLOW}[IPv6] 请先在服务器开通 IPv6 后重试${PLAIN}"
+            fi
+            ;;
+        4) prepare_system; install_socks5 ;;
+        5) prepare_system; view_config ;;
+        6) uninstall ;;
+        7) exit 0 ;;
         *) echo "错误选项";;
     esac
 }

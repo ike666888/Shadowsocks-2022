@@ -306,18 +306,29 @@ view_config() {
         show_menu
         return
     fi
-    
-    if [[ "$IPV6_PREFERRED" == "true" ]]; then
-        IP="$(curl -s6 --max-time 5 ifconfig.me 2>/dev/null)"
-        [[ -z "$IP" ]] && IP="$IPV6_GLOBAL_ADDR"
-    else
-        IP="$(curl -s4 --max-time 5 ifconfig.me 2>/dev/null)"
+
+    PUBLIC_IPV4="$(curl -s4 --max-time 5 ifconfig.me 2>/dev/null)"
+    PUBLIC_IPV6="$(curl -s6 --max-time 5 ifconfig.me 2>/dev/null)"
+
+    if [[ -z "$PUBLIC_IPV6" ]]; then
+        PUBLIC_IPV6="$(ip -6 addr show scope global 2>/dev/null | awk '/inet6/{print $2}' | head -n 1 | cut -d'/' -f1)"
     fi
-    [[ -z "$IP" ]] && IP="$(hostname -I | awk '{print $1}')"
+    [[ -z "$PUBLIC_IPV4" ]] && PUBLIC_IPV4="$(hostname -I | awk '{print $1}')"
+
+    IP="$PUBLIC_IPV4"
+    [[ "$IPV6_PREFERRED" == "true" && -n "$PUBLIC_IPV6" ]] && IP="$PUBLIC_IPV6"
+
     HOST_FOR_URL="$IP"
     [[ "$IP" =~ : ]] && HOST_FOR_URL="[${IP}]"
+
+    IPV4_HOST=""
+    IPV6_HOST=""
+    [[ -n "$PUBLIC_IPV4" ]] && IPV4_HOST="$PUBLIC_IPV4"
+    [[ -n "$PUBLIC_IPV6" ]] && IPV6_HOST="[${PUBLIC_IPV6}]"
     
     echo -e "\n${GREEN}========= 当前配置信息 =========${PLAIN}"
+    [[ -n "$PUBLIC_IPV4" ]] && echo -e "IPv4: ${PUBLIC_IPV4}"
+    [[ -n "$PUBLIC_IPV6" ]] && echo -e "IPv6: ${PUBLIC_IPV6}"
     
     S_IN=$(jq -c '.inbounds[] | select(.tag=="socks-in")' $CONFIG_FILE 2>/dev/null)
     if [[ -n "$S_IN" ]]; then
@@ -328,7 +339,8 @@ view_config() {
         echo -e "地址: ${IP}:${SP}"
         echo -e "用户: ${SU}"
         echo -e "密码: ${SW}"
-        echo -e "链接: socks5://${SU}:${SW}@${HOST_FOR_URL}:${SP}"
+        [[ -n "$IPV4_HOST" ]] && echo -e "IPv4链接: socks5://${SU}:${SW}@${IPV4_HOST}:${SP}"
+        [[ -n "$IPV6_HOST" ]] && echo -e "IPv6链接: socks5://${SU}:${SW}@${IPV6_HOST}:${SP}"
     fi
 
     SS_IN=$(jq -c '.inbounds[] | select(.tag=="ss-in")' $CONFIG_FILE 2>/dev/null)
@@ -353,28 +365,39 @@ view_config() {
             
             JSON="{\"version\":\"3\",\"host\":\"${TH}\",\"password\":\"${TW}\"}"
             PARAM=$(echo -n "$JSON" | base64 -w 0)
-            LINK="ss://${USER_INFO}@${HOST_FOR_URL}:${TP}?shadow-tls=${PARAM}#ShadowTLS"
             
-            PLUGIN="shadow-tls;host=${TH};password=${TW}"
-            PLUGIN_ENC=$(echo -n "$PLUGIN" | sed 's/;/\\%3B/g;s/=/\\%3D/g')
-            SIP="ss://${USER_INFO}@${HOST_FOR_URL}:${TP}/?plugin=${PLUGIN_ENC}#ShadowTLS-SIP"
-            
+            if [[ -n "$IPV4_HOST" ]]; then
+                LINK4="ss://${USER_INFO}@${IPV4_HOST}:${TP}?shadow-tls=${PARAM}#ShadowTLS-IPv4"
+                PLUGIN="shadow-tls;host=${TH};password=${TW}"
+                PLUGIN_ENC=$(echo -n "$PLUGIN" | sed 's/;/\%3B/g;s/=/\%3D/g')
+                SIP4="ss://${USER_INFO}@${IPV4_HOST}:${TP}/?plugin=${PLUGIN_ENC}#ShadowTLS-SIP-IPv4"
+            fi
+
+            if [[ -n "$IPV6_HOST" ]]; then
+                LINK6="ss://${USER_INFO}@${IPV6_HOST}:${TP}?shadow-tls=${PARAM}#ShadowTLS-IPv6"
+                PLUGIN="shadow-tls;host=${TH};password=${TW}"
+                PLUGIN_ENC=$(echo -n "$PLUGIN" | sed 's/;/\%3B/g;s/=/\%3D/g')
+                SIP6="ss://${USER_INFO}@${IPV6_HOST}:${TP}/?plugin=${PLUGIN_ENC}#ShadowTLS-SIP-IPv6"
+            fi
+
             echo -e "\n${GREEN}[Shadowrocket]${PLAIN}"
-            echo -e "${LINK}"
+            [[ -n "$LINK4" ]] && echo -e "${LINK4}"
+            [[ -n "$LINK6" ]] && echo -e "${LINK6}"
             echo -e "\n${GREEN}[v2rayN / NekoBox / SIP]${PLAIN}"
-            echo -e "${SIP}"
+            [[ -n "$SIP4" ]] && echo -e "${SIP4}"
+            [[ -n "$SIP6" ]] && echo -e "${SIP6}"
         else
             echo -e "\n${YELLOW}--- Shadowsocks ---${PLAIN}"
             echo -e "地址: ${IP}:${SSP}"
             echo -e "密码: ${SSW}"
             echo -e "加密: ${SSM}"
-            echo -e "链接: ss://${USER_INFO}@${HOST_FOR_URL}:${SSP}#SS-Node"
+            [[ -n "$IPV4_HOST" ]] && echo -e "IPv4链接: ss://${USER_INFO}@${IPV4_HOST}:${SSP}#SS-Node-IPv4"
+            [[ -n "$IPV6_HOST" ]] && echo -e "IPv6链接: ss://${USER_INFO}@${IPV6_HOST}:${SSP}#SS-Node-IPv6"
             [[ "$IPV6_PREFERRED" == "true" ]] && echo -e "模式: IPv6 + SS2022"
         fi
     fi
     show_footer
 }
-
 uninstall() {
     echo -e "${YELLOW}[卸载] 选择:${PLAIN}"
     echo " 1) 卸载 Shadowsocks/TLS"

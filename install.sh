@@ -10,6 +10,7 @@ CONFIG_FILE="${CONFIG_DIR}/config.json"
 BIN_PATH="/usr/local/bin/sing-box"
 SHORTCUT_PATH="/usr/local/bin/sb"
 IPV6_PREFERRED="false"
+LINK_VIEW_MODE="dual"
 
 check_os() {
     if [ -f /etc/alpine-release ]; then
@@ -105,6 +106,51 @@ check_port() {
     return 0
 }
 
+
+validate_port() {
+    local port="$1"
+    [[ "$port" =~ ^[0-9]+$ ]] || return 1
+    ((port >= 1 && port <= 65535)) || return 1
+    return 0
+}
+
+warn_reserved_port() {
+    local port="$1"
+    if ((port < 1024)); then
+        echo -e "${YELLOW}[提示] ${port} 属于系统保留端口，请确认是否有冲突${PLAIN}"
+    fi
+    case "$port" in
+        22|53|80|123|443|3306|5432|6379|8080)
+            echo -e "${YELLOW}[提示] ${port} 是常见服务端口，请确认不会影响现有业务${PLAIN}" ;;
+    esac
+}
+
+ask_port() {
+    local prompt="$1"
+    local default_port="$2"
+    local __resultvar="$3"
+    local input
+
+    while true; do
+        read -p "${prompt} (默认: ${default_port}): " input
+        input=${input:-$default_port}
+
+        if ! validate_port "$input"; then
+            echo -e "${RED}端口无效，请输入 1-65535 之间的数字${PLAIN}"
+            continue
+        fi
+
+        if ! check_port "$input"; then
+            echo -e "${RED}端口占用${PLAIN}"
+            continue
+        fi
+
+        warn_reserved_port "$input"
+        printf -v "$__resultvar" '%s' "$input"
+        return 0
+    done
+}
+
 install_singbox() {
     if [[ -f "$BIN_PATH" ]]; then
         mkdir -p $CONFIG_DIR
@@ -188,10 +234,7 @@ update_config() {
 
 install_socks5() {
     echo -e "\n${YELLOW}[配置] SOCKS5 参数:${PLAIN}"
-    while true; do
-        read -p "端口 (默认: 1080): " S_PORT; S_PORT=${S_PORT:-1080}
-        if check_port $S_PORT; then break; else echo -e "${RED}端口占用${PLAIN}"; fi
-    done
+    ask_port "端口" "1080" S_PORT
     read -p "用户 (默认: admin): " S_USER; S_USER=${S_USER:-admin}
     read -p "密码 (默认: 随机): " S_PASS; S_PASS=${S_PASS:-$(openssl rand -hex 4)}
 
@@ -245,10 +288,7 @@ configure_ss() {
             *) SS_METHOD="2022-blake3-aes-128-gcm";;
         esac
         
-        while true; do
-            read -p "SS 端口 (默认: 9000): " SS_PORT; SS_PORT=${SS_PORT:-9000}
-            if check_port $SS_PORT; then break; else echo -e "${RED}端口占用${PLAIN}"; fi
-        done
+        ask_port "SS 端口" "9000" SS_PORT
         SS_PASS=$(openssl rand -base64 16)
     fi
 
@@ -300,6 +340,7 @@ install_ss_core() {
 }
 
 view_config() {
+    local mode="${1:-$LINK_VIEW_MODE}"
     if [[ ! -f "$CONFIG_FILE" ]]; then 
         echo -e "${RED}错误：未找到配置文件，请先安装协议！${PLAIN}"
         read -p "按回车键返回主菜单..."
@@ -318,15 +359,21 @@ view_config() {
     IP="$PUBLIC_IPV4"
     [[ "$IPV6_PREFERRED" == "true" && -n "$PUBLIC_IPV6" ]] && IP="$PUBLIC_IPV6"
 
-    HOST_FOR_URL="$IP"
-    [[ "$IP" =~ : ]] && HOST_FOR_URL="[${IP}]"
+    SHOW_IPV4="true"
+    SHOW_IPV6="true"
+    case "$mode" in
+        ipv4) SHOW_IPV6="false" ;;
+        ipv6) SHOW_IPV4="false" ;;
+        *) ;;
+    esac
 
     IPV4_HOST=""
     IPV6_HOST=""
-    [[ -n "$PUBLIC_IPV4" ]] && IPV4_HOST="$PUBLIC_IPV4"
-    [[ -n "$PUBLIC_IPV6" ]] && IPV6_HOST="[${PUBLIC_IPV6}]"
+    [[ "$SHOW_IPV4" == "true" && -n "$PUBLIC_IPV4" ]] && IPV4_HOST="$PUBLIC_IPV4"
+    [[ "$SHOW_IPV6" == "true" && -n "$PUBLIC_IPV6" ]] && IPV6_HOST="[${PUBLIC_IPV6}]"
     
     echo -e "\n${GREEN}========= 当前配置信息 =========${PLAIN}"
+    echo -e "链接显示模式: ${YELLOW}${mode}${PLAIN}"
     [[ -n "$PUBLIC_IPV4" ]] && echo -e "IPv4: ${PUBLIC_IPV4}"
     [[ -n "$PUBLIC_IPV6" ]] && echo -e "IPv6: ${PUBLIC_IPV6}"
     
@@ -365,18 +412,17 @@ view_config() {
             
             JSON="{\"version\":\"3\",\"host\":\"${TH}\",\"password\":\"${TW}\"}"
             PARAM=$(echo -n "$JSON" | base64 -w 0)
+
+            PLUGIN="shadow-tls;host=${TH};password=${TW}"
+            PLUGIN_ENC=$(echo -n "$PLUGIN" | sed 's/;/\%3B/g;s/=/\%3D/g')
             
             if [[ -n "$IPV4_HOST" ]]; then
                 LINK4="ss://${USER_INFO}@${IPV4_HOST}:${TP}?shadow-tls=${PARAM}#ShadowTLS-IPv4"
-                PLUGIN="shadow-tls;host=${TH};password=${TW}"
-                PLUGIN_ENC=$(echo -n "$PLUGIN" | sed 's/;/\%3B/g;s/=/\%3D/g')
                 SIP4="ss://${USER_INFO}@${IPV4_HOST}:${TP}/?plugin=${PLUGIN_ENC}#ShadowTLS-SIP-IPv4"
             fi
 
             if [[ -n "$IPV6_HOST" ]]; then
                 LINK6="ss://${USER_INFO}@${IPV6_HOST}:${TP}?shadow-tls=${PARAM}#ShadowTLS-IPv6"
-                PLUGIN="shadow-tls;host=${TH};password=${TW}"
-                PLUGIN_ENC=$(echo -n "$PLUGIN" | sed 's/;/\%3B/g;s/=/\%3D/g')
                 SIP6="ss://${USER_INFO}@${IPV6_HOST}:${TP}/?plugin=${PLUGIN_ENC}#ShadowTLS-SIP-IPv6"
             fi
 
@@ -397,6 +443,82 @@ view_config() {
         fi
     fi
     show_footer
+}
+
+set_link_view_mode() {
+    echo -e "\n${YELLOW}[设置] 链接显示模式${PLAIN}"
+    echo " 1) 双栈 (IPv4 + IPv6)"
+    echo " 2) 仅 IPv4"
+    echo " 3) 仅 IPv6"
+    read -p "选项 (默认: 1): " MODE_OPT
+
+    case "${MODE_OPT:-1}" in
+        1) LINK_VIEW_MODE="dual" ;;
+        2) LINK_VIEW_MODE="ipv4" ;;
+        3) LINK_VIEW_MODE="ipv6" ;;
+        *) LINK_VIEW_MODE="dual" ;;
+    esac
+
+    echo -e "${GREEN}[完成] 当前链接显示模式: ${LINK_VIEW_MODE}${PLAIN}"
+}
+
+reset_passwords() {
+    install_singbox || return 1
+    if [[ ! -f "$CONFIG_FILE" ]]; then
+        echo -e "${RED}[错误] 未找到配置文件${PLAIN}"
+        return 1
+    fi
+
+    echo -e "\n${YELLOW}[维护] 重置密码（端口不变）${PLAIN}"
+    echo " 1) 重置 Shadowsocks 密码"
+    echo " 2) 重置 ShadowTLS 密码"
+    echo " 3) 重置 SOCKS5 密码"
+    echo " 4) 一键重置全部"
+    read -p "选项: " R_OPT
+
+    tmp=$(mktemp)
+    local changed="false"
+
+    if [[ "$R_OPT" == "1" || "$R_OPT" == "4" ]]; then
+        if jq -e '.inbounds[] | select(.tag=="ss-in")' "$CONFIG_FILE" >/dev/null 2>&1; then
+            NEW_SS_PASS=$(openssl rand -base64 16)
+            jq --arg pass "$NEW_SS_PASS" '(.inbounds[] | select(.tag=="ss-in").password) = $pass' "$CONFIG_FILE" > "$tmp" && mv "$tmp" "$CONFIG_FILE"
+            echo -e "${GREEN}[完成] SS 密码已重置${PLAIN}"
+            changed="true"
+        else
+            echo -e "${YELLOW}[跳过] 未找到 ss-in${PLAIN}"
+        fi
+    fi
+
+    if [[ "$R_OPT" == "2" || "$R_OPT" == "4" ]]; then
+        if jq -e '.inbounds[] | select(.tag=="stls-in")' "$CONFIG_FILE" >/dev/null 2>&1; then
+            NEW_TLS_PASS=$(openssl rand -hex 8)
+            jq --arg pass "$NEW_TLS_PASS" '(.inbounds[] | select(.tag=="stls-in").users[0].password) = $pass' "$CONFIG_FILE" > "$tmp" && mv "$tmp" "$CONFIG_FILE"
+            echo -e "${GREEN}[完成] ShadowTLS 密码已重置${PLAIN}"
+            changed="true"
+        else
+            echo -e "${YELLOW}[跳过] 未找到 stls-in${PLAIN}"
+        fi
+    fi
+
+    if [[ "$R_OPT" == "3" || "$R_OPT" == "4" ]]; then
+        if jq -e '.inbounds[] | select(.tag=="socks-in")' "$CONFIG_FILE" >/dev/null 2>&1; then
+            NEW_SOCKS_PASS=$(openssl rand -hex 8)
+            jq --arg pass "$NEW_SOCKS_PASS" '(.inbounds[] | select(.tag=="socks-in").users[0].password) = $pass' "$CONFIG_FILE" > "$tmp" && mv "$tmp" "$CONFIG_FILE"
+            echo -e "${GREEN}[完成] SOCKS5 密码已重置${PLAIN}"
+            changed="true"
+        else
+            echo -e "${YELLOW}[跳过] 未找到 socks-in${PLAIN}"
+        fi
+    fi
+
+    rm -f "$tmp"
+    if [[ "$changed" == "true" ]]; then
+        update_config || return 1
+        view_config
+    else
+        echo -e "${YELLOW}[提示] 没有可更新的配置${PLAIN}"
+    fi
 }
 uninstall() {
     echo -e "${YELLOW}[卸载] 选择:${PLAIN}"
@@ -439,10 +561,12 @@ show_menu() {
     echo -e "${GREEN}3.${PLAIN} 安装 IPv6 + Shadowsocks 2022"
     echo -e "${GREEN}4.${PLAIN} 安装 SOCKS5 代理"
     echo -e "${GREEN}5.${PLAIN} 查看当前配置链接"
-    echo -e "${RED}6.${PLAIN} 卸载服务"
-    echo -e "${GREEN}7.${PLAIN} 退出"
+    echo -e "${GREEN}6.${PLAIN} 设置链接显示模式 (IPv4/IPv6/双栈)"
+    echo -e "${GREEN}7.${PLAIN} 重置密码（端口不变）"
+    echo -e "${RED}8.${PLAIN} 卸载服务"
+    echo -e "${GREEN}9.${PLAIN} 退出"
     echo -e "----------------------------------------------"
-    read -p "请输入选项 [1-7]: " MENU_CHOICE
+    read -p "请输入选项 [1-9]: " MENU_CHOICE
 
     case "$MENU_CHOICE" in
         1|2) prepare_system; configure_ss; install_ss_core ;;
@@ -458,14 +582,16 @@ show_menu() {
             ;;
         4) prepare_system; install_socks5 ;;
         5) prepare_system; view_config ;;
-        6) uninstall ;;
-        7) exit 0 ;;
+        6) set_link_view_mode ;;
+        7) prepare_system; reset_passwords ;;
+        8) uninstall ;;
+        9) exit 0 ;;
         *) echo "错误选项";;
     esac
 }
 
 if [[ "$1" == "view" ]]; then
-    view_config
+    view_config "$2"
 else
     show_menu
 fi

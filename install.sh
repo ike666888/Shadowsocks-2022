@@ -163,14 +163,15 @@ install_singbox() {
     fi
 
     echo -e "${YELLOW}[核心] 获取 Sing-box 最新版本...${PLAIN}"
-    LATEST_URL=$(curl -s https://api.github.com/repos/SagerNet/sing-box/releases/latest | grep "browser_download_url" | grep "linux-${SB_ARCH}.tar.gz" | cut -d '"' -f 4 | head -n 1)
-    VERSION=$(echo $LATEST_URL | awk -F'sing-box-' '{print $2}' | awk -F'-linux' '{print $1}')
-    
-    if [[ -z "$LATEST_URL" ]]; then
-        echo -e "${RED}[错误] 无法获取下载链接。${PLAIN}"; return 1
+    RELEASE_JSON=$(curl -fsSL --retry 3 -H "User-Agent: sb-installer" "https://api.github.com/repos/SagerNet/sing-box/releases/latest")
+    LATEST_URL=$(echo "$RELEASE_JSON" | jq -r --arg arch "$SB_ARCH" '.assets[] | select(.name | test("linux-" + $arch + "\\.tar\\.gz$")) | .browser_download_url' | head -n 1)
+    VERSION=$(echo "$RELEASE_JSON" | jq -r '.tag_name // empty')
+
+    if [[ -z "$LATEST_URL" || -z "$VERSION" ]]; then
+        echo -e "${RED}[错误] 无法获取最新版本或下载链接，请检查网络后重试。${PLAIN}"; return 1
     fi
 
-    echo -e "${GREEN}[核心] 正在下载 Sing-box v${VERSION}...${PLAIN}"
+    echo -e "${GREEN}[核心] 正在下载 Sing-box ${VERSION}...${PLAIN}"
     wget -qO /tmp/sing-box.tar.gz "$LATEST_URL"
     if [[ ! -s /tmp/sing-box.tar.gz ]]; then echo -e "${RED}下载失败!${PLAIN}"; return 1; fi
 
@@ -195,8 +196,8 @@ Description=Sing-box Service
 After=network.target nss-lookup.target
 [Service]
 User=root
-CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_BIND_SERVICE
-AmbientCapabilities=CAP_NET_ADMIN CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+AmbientCapabilities=CAP_NET_BIND_SERVICE
 ExecStart=$BIN_PATH run -c $CONFIG_FILE
 Restart=on-failure
 RestartSec=10
@@ -249,7 +250,8 @@ install_socks5() {
            "tag": "socks-in",
            "listen": "::",
            "listen_port": ($port|tonumber),
-           "users": [{"username": $user, "password": $pass}]
+           "users": [{"username": $user, "password": $pass}],
+           "udp": true
        }]' $CONFIG_FILE > $tmp && mv $tmp $CONFIG_FILE
 
     update_config
@@ -315,8 +317,7 @@ install_ss_core() {
                "listen": $listen,
                "listen_port": ($port|tonumber),
                "method": $method,
-               "password": $pass,
-               "multiplex": {"enabled": true}
+               "password": $pass
            }]' $CONFIG_FILE > $tmp && mv $tmp $CONFIG_FILE
     fi
 
